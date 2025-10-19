@@ -97,6 +97,10 @@ class ForecastEngine:
             sku_info
         )
 
+        # Extract month labels for frontend display
+        month_labels = [f['date'] for f in monthly_forecasts]  # e.g., ['2024-10', '2024-11', ...]
+        forecast_start_date = monthly_forecasts[0]['date'] if monthly_forecasts else None
+
         # Package results
         return {
             'sku_id': sku_id,
@@ -106,7 +110,9 @@ class ForecastEngine:
             'method_used': f"{method_config['method']}_ma_{method_config['months']}mo",
             'confidence_score': method_config['confidence'],
             'seasonal_pattern': sku_info.get('seasonal_pattern', 'unknown'),
-            'growth_rate_applied': self.growth_rate
+            'growth_rate_applied': self.growth_rate,
+            'forecast_start_date': forecast_start_date,
+            'month_labels': month_labels
         }
 
     def _get_sku_info(self, sku_id: str) -> Optional[Dict]:
@@ -245,10 +251,22 @@ class ForecastEngine:
             List of 12 monthly forecast dictionaries
         """
         forecasts = []
-        current_date = datetime.now()
+
+        # Get latest sales data month and start forecast from the NEXT month
+        # This ensures alignment with actual data availability
+        query = "SELECT MAX(`year_month`) as latest_month FROM monthly_sales"
+        result = execute_query(query, fetch_all=True)
+
+        if result and result[0]['latest_month']:
+            from dateutil.relativedelta import relativedelta
+            latest_month = datetime.strptime(result[0]['latest_month'], '%Y-%m')
+            current_date = latest_month + relativedelta(months=1)
+        else:
+            # Fallback to current month if no sales data (shouldn't happen)
+            current_date = datetime.now().replace(day=1)
 
         for month_offset in range(12):
-            future_date = current_date + timedelta(days=30 * month_offset)
+            future_date = current_date + relativedelta(months=month_offset)
             month_num = future_date.month
 
             # Apply seasonal adjustment
@@ -343,17 +361,25 @@ def create_forecast_run(forecast_name: str, growth_assumption: float = 0.0) -> i
     Returns:
         ID of the created forecast run
     """
-    query = """
-        INSERT INTO forecast_runs
-        (forecast_name, forecast_date, status, growth_assumption, created_by)
-        VALUES (%s, CURDATE(), 'pending', %s, 'system')
-    """
+    import pymysql
+    from .database import get_database_connection
 
-    execute_query(query, (forecast_name, growth_assumption), fetch_all=False)
+    # Use direct connection to ensure INSERT and LAST_INSERT_ID() use same connection
+    connection = get_database_connection()
+    try:
+        with connection.cursor() as cursor:
+            query = """
+                INSERT INTO forecast_runs
+                (forecast_name, forecast_date, status, growth_assumption, created_by)
+                VALUES (%s, CURDATE(), 'pending', %s, 'system')
+            """
+            cursor.execute(query, (forecast_name, growth_assumption))
+            connection.commit()
 
-    # Get the inserted ID
-    result = execute_query('SELECT LAST_INSERT_ID() as id', fetch_all=True)
-    return result[0]['id']
+            # Get the inserted ID from the same connection
+            return cursor.lastrowid
+    finally:
+        connection.close()
 
 
 def update_forecast_run_status(
