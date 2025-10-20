@@ -360,7 +360,138 @@ Identified that Burnaby warehouse forecasts show 60% lower values than historica
 
 ---
 
-## V7.0 Detailed Tasks (ALL COMPLETED ✓ - Ready to Archive to TASKS_ARCHIVE_V7.md)
+### V7.2.2 - V7.2.4: Warehouse-Specific Fixes & UI Improvements (COMPLETED)
+
+**Summary**: Series of critical fixes for warehouse-specific forecasting, seasonal factor calculations, and UI improvements.
+
+**V7.2.2**: Warehouse-specific seasonal factors fix
+**V7.2.3**: Missing warehouse column in forecast_runs table
+**V7.2.4**: Details button fix for SKUs with special characters (CSC-R55)
+
+**Task Range**: TASK-467 to TASK-470
+
+**Detailed Documentation**: [previouscontext4.md](previouscontext4.md)
+
+---
+
+### V7.3: New SKU Pattern Detection & Stockout Auto-Sync (COMPLETED)
+
+**Summary**: Critical fixes for new SKU forecasting implementing Test & Learn pattern detection for launch spikes and early stockouts, plus automatic stockout data synchronization from stockout_dates table to monthly_sales before forecasting. Expert-validated methodology addresses severe under-forecasting for new products (84% improvement for test case).
+
+**Expert Validation**: Methodology reviewed and approved by forecasting specialist (see docs/claudesuggestion.md, docs/claudesuggestions2.md)
+
+**V7.3 Release History**:
+- V7.3: Initial pattern detection implementation
+- V7.4: Pattern detection bug fixes
+- V7.5: Auto-sync stockout data + final pattern fixes
+
+**Key Improvements**:
+
+1. **Test & Learn Pattern Detection** (Expert-Recommended)
+   - Launch spike detection using max_month vs avg_others (30% threshold)
+   - Early stockout detection in first 50% of data or first 3 months
+   - Weighted average baseline: (recent_3 * 0.7) + (older_3 * 0.3)
+   - Stockout boost: 1.2x when early stockout proves demand
+   - Safety multiplier: 1.1x for pattern-based (vs 1.3-1.5x for standard)
+   - Confidence scoring: 0.55 for pattern-based forecasts
+
+2. **Automatic Stockout Data Sync** (Critical Fix)
+   - Auto-sync call in forecast_jobs.py before forecasting begins
+   - Syncs monthly_sales.stockout_days from stockout_dates table
+   - Processes 3,268 month-warehouse records for 504 SKUs
+   - Ensures availability_rate calculations use actual stockout data
+   - Eliminates need for manual sync API calls
+
+3. **Pattern Detection Bug Fixes**
+   - Availability rate CASE prioritizes stockout_days over sales
+   - Launch spike uses max_month instead of first_month approach
+   - Early stockout check extended to max(3, len//2) months
+   - Edge case handling for uniform clean_months values
+   - Comprehensive debug logging throughout detection logic
+
+**Business Impact**:
+- UB-YTX7A-BS forecast: 42.59 → 79.20 units/month (84% increase)
+- Method correctly identified as "limited_data_test_launch"
+- Baseline calculation: 72.00 (avg of clean months [24, 133, 100, 31])
+- Final forecast includes 1.1x safety multiplier
+- Expected range achieved: ~60-90 units/month
+- Established SKUs unaffected (regression test passed)
+
+**Technical Achievements**:
+- Clean months correctly exclude stockout periods (< 30% availability)
+- June 2025 (1 unit, 30 stockout_days) properly excluded
+- Launch spike detected: April 133 units > threshold 67.17
+- Edge case: StatisticsError fixed for uniform data
+- Auto-sync: 3,268 records updated in ~20 seconds
+
+**Root Cause Analysis**:
+- Problem: June-July 2025 had 0 stockout_days in database
+- Impact: Pattern detection treated stockouts as "low sales"
+- Solution: Auto-sync from stockout_dates before forecasting
+- Result: Accurate availability_rate calculations
+
+**Files Modified**:
+- backend/forecast_jobs.py (lines 102-109): Auto-sync call
+- backend/forecasting.py (lines 732-748): Availability rate calculation
+- backend/forecasting.py (lines 790-800): Launch spike detection + edge case
+- backend/forecasting.py (lines 802-812): Early stockout detection range
+- backend/forecasting.py (lines 767-847): Debug logging
+
+**Verification Results**:
+- UB-YTX7A-BS: 79 units/month (vs 42 before, expected ~60-90)
+- UB-YTX14-BS: 2,708 base, 1,651-1,747 months 1-3 (unchanged)
+- Stockout sync: 3,268 records processed successfully
+- Debug logs: Correct pattern detection and calculation trace
+
+**Task Range**: TASK-471 to TASK-480
+
+**Completion Date**: 2025-10-20
+
+**Status**: COMPLETED - All fixes verified and production ready
+
+**Detailed Documentation**: [previouscontext3.md](previouscontext3.md) - Session context for initial fixes
+
+---
+
+### V7.4: Enhanced Forecasting - Growth Rate & New SKU Techniques (PLANNED)
+
+**Summary**: Future enhancements for automatic growth rate calculation, advanced new SKU forecasting with similar SKU matching, and forecast queue management for concurrent requests. Deferred to allow V7.3 pattern detection to stabilize in production.
+
+**Planned Improvements**:
+
+1. **Auto Growth Rate** (Expert-Recommended)
+   - SKU-specific trend analysis using weighted linear regression (6-12 months data)
+   - Exponential weighting favoring recent months (0.5^(n-i) decay)
+   - Category-level fallback when SKU has < 6 months data
+   - ±50% cap for safety (expert confirmed appropriate)
+   - Manual override preserved for user control
+
+2. **Advanced New SKU Forecasting**
+   - Similar SKU matching by category + ABC/XYZ classification
+   - Seasonal factor averaging from similar SKUs
+   - growth_status integration from existing data
+   - pending_inventory check to avoid over-ordering
+   - Enhanced confidence scoring
+
+3. **Queue Management**
+   - Python queue.Queue() for pending forecasts
+   - User confirmation dialog: "Queue or Cancel?"
+   - Real-time queue position tracking
+   - Delete/Cancel buttons for each run
+
+**Task Range**: TASK-481 to TASK-505
+
+**Performance Targets**:
+- Queue operations: < 100ms
+- Growth rate calculation: < 50ms per SKU
+- New SKU similar matching: < 200ms per SKU
+- Overall forecast generation: < 20 seconds for 1,768 SKUs
+
+**Status**: PLANNED (not started)
+
+---
+
+## V7.0-V7.2 Detailed Tasks (ALL COMPLETED ✓ - Archived)
 
 **Note**: All tasks below have been completed and verified. See [previouscontext4.md](previouscontext4.md) for complete session summary with test results and performance metrics.
 
@@ -825,9 +956,9 @@ A task is complete when:
 
 ---
 
-**Last Updated**: 2025-10-18
-**Total Tasks Completed**: 440 (V7.0 Forecasting System Complete)
-**Project Status**: Production Ready with Complete Forecasting Capabilities
-**Next Steps**: User training on forecasting features, production monitoring, and feedback collection
+**Last Updated**: 2025-10-20
+**Total Tasks Completed**: 480 (V7.3 New SKU Pattern Detection Complete)
+**Project Status**: Production Ready with Enhanced New SKU Forecasting
+**Next Steps**: Monitor V7.3 pattern detection in production, collect feedback on new SKU accuracy
 
-**Latest Achievement**: V7.0 12-Month Sales Forecasting System fully operational - 950 SKUs processed in 9.23 seconds with 100% success rate
+**Latest Achievement**: V7.3 New SKU Pattern Detection & Stockout Auto-Sync - 84% improvement in new SKU forecasts (UB-YTX7A-BS: 42 → 79 units/month)

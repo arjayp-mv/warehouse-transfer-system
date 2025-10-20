@@ -99,6 +99,15 @@ class ForecastJobWorker:
             logger.info(f"[Run {run_id}] Starting forecast job with {len(sku_ids)} SKUs")
             logger.info(f"[Run {run_id}] Warehouse: {warehouse}, Growth Rate: {growth_rate}")
 
+            # Sync stockout days from stockout_dates table before forecasting
+            logger.info(f"[Run {run_id}] Syncing stockout days from stockout_dates table...")
+            from backend.database import sync_all_stockout_days
+            sync_result = sync_all_stockout_days()
+            if sync_result['success']:
+                logger.info(f"[Run {run_id}] Stockout sync complete: {sync_result['processed_records']} records updated for {sync_result['processed_skus']} SKUs")
+            else:
+                logger.warning(f"[Run {run_id}] Stockout sync had {len(sync_result.get('errors', []))} errors")
+
             # Update status to running
             update_forecast_run_status(
                 run_id,
@@ -111,7 +120,8 @@ class ForecastJobWorker:
 
             # Initialize forecast engine
             logger.info(f"[Run {run_id}] Initializing ForecastEngine")
-            engine = ForecastEngine(run_id, growth_rate)
+            # growth_rate is now manual_growth_override (if None, rates are auto-calculated per SKU)
+            engine = ForecastEngine(run_id, manual_growth_override=growth_rate)
 
             processed_count = 0
             failed_count = 0
@@ -269,9 +279,14 @@ def start_forecast_generation(
 
     Args:
         forecast_name: User-friendly name for this forecast
-        sku_filter: Optional filter criteria (e.g., {'abc_code': 'A', 'status': 'Active'})
-        warehouse: Warehouse location
-        growth_rate: Optional growth rate to apply
+        sku_filter: Optional filter criteria including:
+                   - status_filter: List of statuses to include (e.g., ['Active', 'Death Row'])
+                   - abc_code: ABC classification filter (e.g., 'A')
+                   - xyz_code: XYZ classification filter (e.g., 'X')
+                   - category: Category filter
+                   If not provided, defaults to all statuses and no ABC/XYZ filters
+        warehouse: Warehouse location ('burnaby', 'kentucky', 'combined')
+        growth_rate: Optional growth rate to apply (e.g., 0.05 for 5% growth)
 
     Returns:
         Forecast run ID
@@ -285,8 +300,8 @@ def start_forecast_generation(
     logger.info(f"Starting forecast generation: '{forecast_name}'")
     logger.info(f"Filters: {sku_filter}, Warehouse: {warehouse}, Growth Rate: {growth_rate}")
 
-    # Create forecast run entry
-    run_id = create_forecast_run(forecast_name, growth_rate)
+    # Create forecast run entry with warehouse information
+    run_id = create_forecast_run(forecast_name, growth_rate, warehouse)
     logger.info(f"Created forecast run with ID: {run_id}")
 
     # Get SKUs to process based on filter
@@ -295,7 +310,7 @@ def start_forecast_generation(
 
     # Validate SKU list
     if not sku_ids or len(sku_ids) == 0:
-        error_msg = f"No active SKUs found matching filter: {sku_filter}"
+        error_msg = f"No SKUs found matching filter: {sku_filter}"
         logger.error(error_msg)
 
         # Update run status to failed
@@ -323,14 +338,31 @@ def _get_skus_to_forecast(sku_filter: Dict = None) -> List[str]:
     Get list of SKU IDs to include in forecast.
 
     Args:
-        sku_filter: Optional filter criteria
+        sku_filter: Optional filter criteria including:
+                   - abc_code: ABC classification filter
+                   - xyz_code: XYZ classification filter
+                   - category: Category filter
+                   - status_filter: List of statuses to include (default: all statuses)
 
     Returns:
         List of SKU IDs
     """
     # Build query with optional filters
-    where_clauses = ["status = 'Active'"]  # Always filter to active SKUs
     params = []
+    where_clauses = []
+
+    # Handle status filter - default to all statuses if not specified
+    if sku_filter and 'status_filter' in sku_filter:
+        statuses = sku_filter['status_filter']
+        if statuses and len(statuses) > 0:
+            placeholders = ','.join(['%s'] * len(statuses))
+            where_clauses.append(f'status IN ({placeholders})')
+            params.extend(statuses)
+            logger.info(f"Filtering by statuses: {statuses}")
+    else:
+        # Default: include all three statuses
+        where_clauses.append("status IN ('Active', 'Death Row', 'Discontinued')")
+        logger.info("Using default status filter: Active, Death Row, Discontinued")
 
     if sku_filter:
         if 'abc_code' in sku_filter:
