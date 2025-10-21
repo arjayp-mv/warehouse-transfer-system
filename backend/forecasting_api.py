@@ -44,6 +44,7 @@ class ForecastGenerateRequest(BaseModel):
     growth_rate: float = Field(default=0.0, ge=-1.0, le=1.0)
     abc_filter: Optional[str] = Field(default=None, pattern='^[ABC]$')
     xyz_filter: Optional[str] = Field(default=None, pattern='^[XYZ]$')
+    status_filter: Optional[List[str]] = Field(default=None, description="SKU statuses to include")
 
 
 class ForecastRunResponse(BaseModel):
@@ -97,14 +98,29 @@ async def generate_forecast(request: ForecastGenerateRequest):
         if request.xyz_filter:
             sku_filter['xyz_code'] = request.xyz_filter
 
-        logger.info(f"API: SKU Filter: {sku_filter}, Warehouse: {request.warehouse}, Growth Rate: {request.growth_rate}")
+        # Handle status filter with validation
+        if request.status_filter:
+            valid_statuses = {'Active', 'Death Row', 'Discontinued'}
+            invalid_statuses = [s for s in request.status_filter if s not in valid_statuses]
+            if invalid_statuses:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid status values: {invalid_statuses}. Must be one of: {valid_statuses}"
+                )
+            sku_filter['status_filter'] = request.status_filter
+
+        # Convert growth_rate of 0.0 to None for auto-calculation
+        # User can still manually set 0% by using a very small non-zero value like 0.001
+        growth_rate_override = None if request.growth_rate == 0.0 else request.growth_rate
+
+        logger.info(f"API: SKU Filter: {sku_filter}, Warehouse: {request.warehouse}, Growth Rate: {request.growth_rate} (override: {growth_rate_override})")
 
         # Start forecast generation (background job)
         run_id = start_forecast_generation(
             forecast_name=request.forecast_name,
             sku_filter=sku_filter if sku_filter else None,
             warehouse=request.warehouse,
-            growth_rate=request.growth_rate
+            growth_rate=growth_rate_override
         )
 
         logger.info(f"API: Forecast generation started successfully with run_id={run_id}")
@@ -191,7 +207,8 @@ async def get_forecast_results(
     run_id: int,
     page: int = Query(1, ge=1),
     page_size: int = Query(100, ge=1, le=100),
-    sku_filter: Optional[str] = None
+    sku_filter: Optional[str] = None,
+    search: Optional[str] = None
 ):
     """
     Get forecast results for a completed forecast run.
@@ -202,34 +219,47 @@ async def get_forecast_results(
         run_id: Forecast run ID
         page: Page number (starts at 1)
         page_size: Number of SKUs per page (max 100)
-        sku_filter: Optional SKU ID filter (partial match)
+        sku_filter: Optional SKU ID filter (partial match) - DEPRECATED, use search instead
+        search: Search query to filter SKUs (searches sku_id and description)
 
     Returns:
         Dictionary with forecast results and pagination metadata
     """
     try:
-        # Enforce pagination (best practice)
-        page_size = min(page_size, 100)
-        offset = (page - 1) * page_size
-
-        # Build query with optional SKU filter
-        where_clause = "forecast_run_id = %s"
+        # Build query with optional search filter
+        where_clause = "fd.forecast_run_id = %s"
         params = [run_id]
 
-        if sku_filter:
-            where_clause += " AND sku_id LIKE %s"
-            params.append(f"%{sku_filter}%")
+        # Use search parameter (preferred) or fall back to sku_filter for backwards compatibility
+        search_term = search or sku_filter
 
-        # Get total count
+        if search_term:
+            # Search both SKU ID and description
+            where_clause += " AND (fd.sku_id LIKE %s OR s.description LIKE %s)"
+            search_pattern = f"%{search_term}%"
+            params.extend([search_pattern, search_pattern])
+
+        # When searching, show all results on one page (up to 1000 results)
+        if search_term:
+            page_size = min(1000, page_size * 10)  # Allow up to 1000 search results
+            page = 1  # Reset to first page
+            offset = 0
+        else:
+            # Normal pagination
+            page_size = min(page_size, 100)
+            offset = (page - 1) * page_size
+
+        # Get total count (needs JOIN for description search)
         count_query = f"""
             SELECT COUNT(*) as total
-            FROM forecast_details
+            FROM forecast_details fd
+            JOIN skus s ON fd.sku_id = s.sku_id
             WHERE {where_clause}
         """
         total_result = execute_query(count_query, params=tuple(params), fetch_all=True)
         total_count = total_result[0]['total']
 
-        # Get paginated results
+        # Get paginated/filtered results
         query = f"""
             SELECT
                 fd.sku_id,
@@ -249,7 +279,9 @@ async def get_forecast_results(
                 fd.avg_monthly_rev,
                 fd.confidence_score,
                 fd.method_used,
-                fd.seasonal_pattern_applied
+                fd.seasonal_pattern_applied,
+                fd.growth_rate_applied,
+                fd.growth_rate_source
             FROM forecast_details fd
             JOIN skus s ON fd.sku_id = s.sku_id
             WHERE {where_clause}
@@ -259,6 +291,42 @@ async def get_forecast_results(
 
         params.extend([page_size, offset])
         results = execute_query(query, params=tuple(params), fetch_all=True)
+
+        # Get forecast run info to calculate month labels
+        run_query = "SELECT created_at FROM forecast_runs WHERE id = %s"
+        run_result = execute_query(run_query, params=(run_id,), fetch_all=True)
+
+        # Calculate month labels starting from CURRENT month (latest sales data)
+        # This must match the forecast calculation logic in forecasting.py
+        month_labels = []
+        forecast_start_month = None
+        if run_result and run_result[0]['created_at']:
+            from datetime import datetime, timedelta
+            from dateutil.relativedelta import relativedelta
+
+            # Get latest sales data month (only months with actual sales, not empty placeholders)
+            # to align with forecast engine
+            latest_sales_query = """
+                SELECT MAX(`year_month`) as latest
+                FROM monthly_sales
+                WHERE (burnaby_sales + kentucky_sales) > 0
+            """
+            latest_sales_result = execute_query(latest_sales_query, fetch_all=True)
+
+            if latest_sales_result and latest_sales_result[0]['latest']:
+                # Start from month AFTER latest sales data
+                latest_month = datetime.strptime(latest_sales_result[0]['latest'], '%Y-%m')
+                start_date = latest_month + relativedelta(months=1)
+            else:
+                # Fallback: use creation date (shouldn't happen with valid data)
+                start_date = run_result[0]['created_at']
+
+            forecast_start_month = start_date.strftime('%Y-%m')
+
+            # Generate 12 month labels
+            for i in range(12):
+                month_date = start_date + relativedelta(months=i)
+                month_labels.append(month_date.strftime('%Y-%m'))
 
         # Format results
         forecasts = []
@@ -289,12 +357,16 @@ async def get_forecast_results(
                 'avg_monthly_rev': float(row['avg_monthly_rev']),
                 'confidence_score': float(row['confidence_score']),
                 'method_used': row['method_used'],
-                'seasonal_pattern': row['seasonal_pattern_applied']
+                'seasonal_pattern': row['seasonal_pattern_applied'],
+                'growth_rate_applied': float(row['growth_rate_applied']) if row['growth_rate_applied'] is not None else 0.0,
+                'growth_rate_source': row['growth_rate_source']
             })
 
         return {
             'run_id': run_id,
             'forecasts': forecasts,
+            'forecast_start_month': forecast_start_month,
+            'month_labels': month_labels,
             'pagination': {
                 'page': page,
                 'page_size': page_size,
@@ -471,3 +543,105 @@ async def get_sku_forecasts(sku_id: str):
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to fetch SKU forecasts: {str(e)}")
+
+
+@router.get("/runs/{run_id}/historical/{sku_id}")
+async def get_historical_data(run_id: int, sku_id: str):
+    """
+    Get last 12 months of historical sales data for comparison with forecast.
+    Returns monthly sales quantities and revenues for the year preceding the forecast.
+
+    Args:
+        run_id: Forecast run ID (used to determine forecast start date)
+        sku_id: SKU identifier
+
+    Returns:
+        JSON with months, quantities, and revenues arrays
+    """
+    try:
+        # Get forecast warehouse to match historical data
+        forecast_query = """
+            SELECT created_at, warehouse
+            FROM forecast_runs
+            WHERE id = %s
+        """
+        forecast_result = execute_query(forecast_query, params=(run_id,), fetch_all=True)
+
+        if not forecast_result:
+            raise HTTPException(status_code=404, detail="Forecast run not found")
+
+        # Get warehouse from forecast run, default to 'combined' if NULL (backward compatibility)
+        warehouse = forecast_result[0].get('warehouse') or 'combined'
+
+        # Get latest sales month to align with forecast engine logic
+        # Only consider months with actual sales to avoid empty placeholder records
+        latest_sales_query = """
+            SELECT MAX(`year_month`) as latest
+            FROM monthly_sales
+            WHERE (burnaby_sales + kentucky_sales) > 0
+        """
+        latest_result = execute_query(latest_sales_query, fetch_all=True)
+
+        if not latest_result or not latest_result[0]['latest']:
+            return {
+                'months': [],
+                'quantities': [],
+                'revenues': [],
+                'message': 'No historical data available'
+            }
+
+        # Calculate the 12-month historical period (same months as forecast but previous year)
+        from datetime import datetime
+        from dateutil.relativedelta import relativedelta
+
+        latest_month = datetime.strptime(latest_result[0]['latest'], '%Y-%m')
+        # Historical period: 12 months ending at latest_month
+        history_start = latest_month - relativedelta(months=11)
+
+        # Build warehouse-specific query to match forecast warehouse
+        if warehouse == 'combined':
+            sales_column = 'burnaby_sales + kentucky_sales'
+            revenue_column = '(burnaby_sales + kentucky_sales) * s.cost_per_unit'
+        else:
+            sales_column = f'{warehouse}_sales'
+            revenue_column = f'{warehouse}_sales * s.cost_per_unit'
+
+        # Fetch historical data for the past 12 months
+        history_query = f"""
+            SELECT `year_month`,
+                   {sales_column} as total_sales,
+                   {revenue_column} as total_revenue
+            FROM monthly_sales ms
+            JOIN skus s ON ms.sku_id = s.sku_id
+            WHERE ms.sku_id = %s
+              AND ms.year_month >= %s
+              AND ms.year_month <= %s
+            ORDER BY ms.year_month ASC
+        """
+
+        history_results = execute_query(
+            history_query,
+            params=(sku_id, history_start.strftime('%Y-%m'), latest_month.strftime('%Y-%m')),
+            fetch_all=True
+        )
+
+        # Build arrays for chart
+        months = []
+        quantities = []
+        revenues = []
+
+        for row in history_results:
+            months.append(row['year_month'])
+            quantities.append(float(row['total_sales'] or 0))
+            revenues.append(float(row['total_revenue'] or 0))
+
+        return {
+            'months': months,
+            'quantities': quantities,
+            'revenues': revenues
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch historical data: {str(e)}")

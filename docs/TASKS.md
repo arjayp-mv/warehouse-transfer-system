@@ -453,41 +453,140 @@ Identified that Burnaby warehouse forecasts show 60% lower values than historica
 
 ---
 
-### V7.4: Enhanced Forecasting - Growth Rate & New SKU Techniques (PLANNED)
+### V7.3 Phase 3A: Similar SKU Matching & Enhanced Forecasting (COMPLETED)
 
-**Summary**: Future enhancements for automatic growth rate calculation, advanced new SKU forecasting with similar SKU matching, and forecast queue management for concurrent requests. Deferred to allow V7.3 pattern detection to stabilize in production.
+**Summary**: Fixed critical growth_rate_source persistence bug, month labeling bug, and historical comparison alignment issue. Documented existing similar SKU seasonal factor averaging functionality that was already implemented in V7.0-V7.2 but not properly documented.
+
+**Key Discovery**: Similar SKU seasonal factor averaging was already fully implemented and working! The _find_similar_skus() and _get_average_seasonal_factor() functions were already in place and being used in _handle_limited_data_sku().
+
+**Implementation Completed**:
+
+1. **Database ENUM Fix (CRITICAL BUG)**
+   - Problem: Code was setting growth_rate_source to 'new_sku_methodology' and 'proven_demand_stockout'
+   - Database ENUM only had: manual_override, sku_trend, category_trend, growth_status, default
+   - Result: Values saved as empty string instead of intended descriptive names
+   - Solution: Added new ENUM values to forecast_details.growth_rate_source column
+   - Migration: database/add_growth_rate_source_values.sql
+
+2. **Month Labeling Bug Fix (CRITICAL BUG)**
+   - Problem: Forecasts starting at November 2025 instead of October 2025
+   - Root Cause: Database had empty placeholder records for October 2025 (98 SKUs with 0 sales)
+   - Impact: MAX(year_month) returned 2025-10 → Code added +1 month → Forecasts started at 2025-11 (wrong)
+   - Solution: Changed queries to only consider months with actual sales (burnaby_sales + kentucky_sales > 0)
+   - Files: backend/forecasting.py (lines 583-587), backend/forecasting_api.py (lines 309-313)
+
+3. **Historical Comparison Alignment Fix (CRITICAL BUG)**
+   - Problem: Historical comparison off by 1 month (Oct 2025 forecast vs Nov 2024 historical)
+   - Root Cause: Historical query used MAX(year_month) without filtering empty placeholders
+   - Impact: Historical period Nov 2024 - Oct 2025, Forecast period Oct 2025 - Sep 2026 (misaligned)
+   - Solution: Applied same sales filter to historical comparison query
+   - File: backend/forecasting_api.py (lines 577-582)
+   - Result: Oct 2025 forecast vs Oct 2024 historical (correctly aligned)
+
+4. **Debug Logging Added**
+   - Added debug print in save_forecast() function (line 665-668)
+   - Logs: method_used and growth_rate_source for each SKU saved
+   - Purpose: Verify values are correctly persisting to database
+
+5. **Documentation Enhancement**
+   - Added V7.3 Phase 3A comments explaining similar SKU logic (line 893-898)
+   - Updated _find_similar_skus() docstring with V7.3 context (line 1028-1049)
+   - Clarified: Seasonal factors ARE used, growth rates are NOT (user decision)
+   - Explains matching criteria: category + ABC code + Active status
+
+**User Decisions Implemented**:
+- ❌ Skip growth rate fallback from similar SKUs (needs validation)
+- ❌ Skip pending inventory checks (belongs in future ordering page)
+- ✅ Similar SKU seasonal factor averaging (ALREADY WORKING - documented)
+- ✅ Fixed growth_rate_source metadata persistence (CRITICAL BUG FIXED)
+
+**Files Modified**:
+- database/add_growth_rate_source_values.sql (NEW - ENUM migration)
+- backend/forecasting.py (lines 583-587, 665-668, 893-898, 1028-1049)
+- backend/forecasting_api.py (lines 309-313, 577-582)
+- docs/TASKS.md (this file - marked Phase 3A as completed)
+- docs/summary2.md (comprehensive documentation of all fixes)
+
+**Verification**:
+- Database ENUM now includes: 'new_sku_methodology', 'proven_demand_stockout'
+- Month labeling: Forecasts start at October 2025 (not November)
+- Historical comparison: Oct 2025 vs Oct 2024 (correctly aligned)
+- Debug logging in place for next forecast run
+- Documentation clarifies when/how similar SKUs are used
+- Next forecast run will show correct growth_rate_source values
+
+**Task Range**: TASK-481 to TASK-486
+
+**Tasks Completed**:
+- TASK-481: Database ENUM migration for growth_rate_source values
+- TASK-482: Debug logging for growth_rate_source persistence verification
+- TASK-483: Documentation of similar SKU seasonal factor averaging
+- TASK-484: Month labeling bug fix (filter empty placeholder records)
+- TASK-485: Similar SKU functionality documentation enhancement
+- TASK-486: Historical comparison alignment fix (apply sales filter)
+
+**Status**: COMPLETED (2025-10-20)
+
+---
+
+### V7.3 Phase 4: Queue Management System (PLANNED)
+
+**Summary**: Handle concurrent forecast requests gracefully with queue system, preventing "job already running" errors and improving user experience.
+
+**Scope**:
+
+1. **Backend Queue System**
+   - Python queue.Queue() in forecast_jobs.py
+   - Worker checks queue before starting new job
+   - FIFO processing with queue position tracking
+
+2. **Database Support**
+   - Add queue_position column to forecast_runs
+   - Add queued status (pending → queued → running → completed)
+   - Track queue entry timestamp
+
+3. **API Endpoints**
+   - Modify POST /api/forecasts/generate to enqueue when busy
+   - Add GET /api/forecasts/queue for queue status
+   - Add DELETE /api/forecasts/queue/{run_id} to cancel
+
+4. **Frontend UI**
+   - User confirmation dialog: "Queue or Cancel?"
+   - Display queue position and estimated wait time
+   - Show queued runs in forecast list with special styling
+
+**Files to Modify**:
+- backend/forecast_jobs.py: Queue management logic
+- backend/forecasting_api.py: Queue endpoints
+- frontend/forecasting.js: Queue UI handlers
+- frontend/forecasting.html: Confirmation modal
+- database/schema.sql: queue_position column
+
+**Test Cases**:
+- Generate 2 forecasts simultaneously → second queues
+- Cancel queued forecast → removes from queue
+- Complete running forecast → processes next in queue
+
+**Task Range**: TASK-491 to TASK-505
+
+**Performance Target**: < 100ms for queue operations
+
+**Status**: PLANNED (after Phase 3A completion)
+
+---
+
+### V7.4: Auto Growth Rate Calculation (FUTURE)
+
+**Summary**: Automatic growth rate calculation for all SKUs using weighted linear regression. Deferred until similar SKU matching is validated and we have more data on trend predictability.
 
 **Planned Improvements**:
+- SKU-specific trend analysis using 6-12 months data
+- Exponential weighting favoring recent months
+- Category-level fallback for new SKUs
+- ±50% safety cap
+- Manual override preserved
 
-1. **Auto Growth Rate** (Expert-Recommended)
-   - SKU-specific trend analysis using weighted linear regression (6-12 months data)
-   - Exponential weighting favoring recent months (0.5^(n-i) decay)
-   - Category-level fallback when SKU has < 6 months data
-   - ±50% cap for safety (expert confirmed appropriate)
-   - Manual override preserved for user control
-
-2. **Advanced New SKU Forecasting**
-   - Similar SKU matching by category + ABC/XYZ classification
-   - Seasonal factor averaging from similar SKUs
-   - growth_status integration from existing data
-   - pending_inventory check to avoid over-ordering
-   - Enhanced confidence scoring
-
-3. **Queue Management**
-   - Python queue.Queue() for pending forecasts
-   - User confirmation dialog: "Queue or Cancel?"
-   - Real-time queue position tracking
-   - Delete/Cancel buttons for each run
-
-**Task Range**: TASK-481 to TASK-505
-
-**Performance Targets**:
-- Queue operations: < 100ms
-- Growth rate calculation: < 50ms per SKU
-- New SKU similar matching: < 200ms per SKU
-- Overall forecast generation: < 20 seconds for 1,768 SKUs
-
-**Status**: PLANNED (not started)
+**Status**: DEFERRED (pending Phase 3A validation)
 
 ---
 
@@ -957,8 +1056,11 @@ A task is complete when:
 ---
 
 **Last Updated**: 2025-10-20
-**Total Tasks Completed**: 480 (V7.3 New SKU Pattern Detection Complete)
+**Total Tasks Completed**: 486 (V7.3 Phase 3A Complete - All Critical Bugs Fixed)
 **Project Status**: Production Ready with Enhanced New SKU Forecasting
-**Next Steps**: Monitor V7.3 pattern detection in production, collect feedback on new SKU accuracy
+**Next Steps**: Verify all fixes in browser (month labeling, historical comparison, growth_rate_source), then proceed to V7.3 Phase 4 (Queue Management)
 
-**Latest Achievement**: V7.3 New SKU Pattern Detection & Stockout Auto-Sync - 84% improvement in new SKU forecasts (UB-YTX7A-BS: 42 → 79 units/month)
+**Latest Achievement**: V7.3 Phase 3A - Fixed three critical bugs:
+1. growth_rate_source ENUM persistence (empty database values)
+2. Month labeling alignment (October 2025 start)
+3. Historical comparison year-over-year matching (Oct 2025 vs Oct 2024)

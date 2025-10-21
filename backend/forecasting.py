@@ -578,9 +578,13 @@ class ForecastEngine:
         """
         forecasts = []
 
-        # Get latest sales data month and start forecast from the NEXT month
-        # This ensures alignment with actual data availability
-        query = "SELECT MAX(`year_month`) as latest_month FROM monthly_sales"
+        # Get latest sales data month (only months with actual sales, not empty placeholders)
+        # and start forecast from the NEXT month
+        query = """
+            SELECT MAX(`year_month`) as latest_month
+            FROM monthly_sales
+            WHERE (burnaby_sales + kentucky_sales) > 0
+        """
         result = execute_query(query, fetch_all=True)
 
         if result and result[0]['latest_month']:
@@ -661,6 +665,11 @@ class ForecastEngine:
              %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
              %s, %s, %s, %s, %s, %s)
         """
+
+        # Debug logging for V7.3 Phase 3A - verify growth_rate_source persistence
+        print(f"[DEBUG V7.3] Saving forecast for {forecast_data['sku_id']}: "
+              f"method={forecast_data['method_used']}, "
+              f"growth_rate_source={forecast_data.get('growth_rate_source', 'NOT SET')}")
 
         params = (
             self.forecast_run_id,
@@ -885,7 +894,12 @@ class ForecastEngine:
             if similar_demands:
                 base_from_similar = statistics.mean(similar_demands)
 
-                # Get average seasonal factor from similar SKUs (EXPERT RECOMMENDATION)
+                # V7.3 Phase 3A: Similar SKU Seasonal Factor Averaging
+                # For new SKUs with limited data (< 12 months), we apply seasonal patterns
+                # from similar SKUs (same category, ABC code) that have established patterns.
+                # This helps new products follow expected seasonal trends before they have
+                # their own historical data. The seasonal boost is applied in STEP 4 below.
+                # Note: Growth rates from similar SKUs are NOT used (user decision - needs validation)
                 seasonal_boost = self._get_average_seasonal_factor(similar_skus, warehouse)
             else:
                 base_from_similar = 0.0
@@ -1018,6 +1032,16 @@ class ForecastEngine:
     def _find_similar_skus(self, sku_id: str, sku_info: Dict, warehouse: str) -> List[str]:
         """
         Find similar SKUs based on category, ABC/XYZ classification, and demand patterns.
+
+        V7.3 Phase 3A: This function is used to find comparable SKUs for new products
+        with limited historical data. Similar SKUs must match on:
+        - Same category (e.g., "Motorcycle Battery")
+        - Same ABC code (value classification: A/B/C)
+        - Active status only
+
+        The returned SKUs are used to:
+        1. Apply seasonal patterns to new SKUs (via _get_average_seasonal_factor)
+        2. Calculate baseline demand from similar product performance
 
         Args:
             sku_id: Current SKU identifier
