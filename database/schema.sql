@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Host: 127.0.0.1
--- Generation Time: Oct 07, 2025 at 03:45 AM
+-- Generation Time: Oct 21, 2025 at 04:48 AM
 -- Server version: 10.4.32-MariaDB
 -- PHP Version: 8.2.12
 
@@ -70,8 +70,9 @@ CREATE TABLE `demand_calculation_config` (
 --
 
 CREATE TABLE `forecast_accuracy` (
-  `id` int(11) NOT NULL,
+  `id` int(11) NOT NULL AUTO_INCREMENT,
   `sku_id` varchar(50) NOT NULL,
+  `warehouse` enum('burnaby','kentucky','combined') NOT NULL DEFAULT 'combined' COMMENT 'Warehouse for this forecast (burnaby, kentucky, or combined)',
   `forecast_date` date NOT NULL COMMENT 'Date when forecast was made',
   `forecast_period_start` date NOT NULL COMMENT 'Start of forecasted period',
   `forecast_period_end` date NOT NULL COMMENT 'End of forecasted period',
@@ -85,8 +86,152 @@ CREATE TABLE `forecast_accuracy` (
   `xyz_class` char(1) DEFAULT NULL COMMENT 'XYZ class at time of forecast',
   `seasonal_pattern` varchar(20) DEFAULT NULL COMMENT 'Seasonal pattern at time of forecast',
   `is_actual_recorded` tinyint(1) DEFAULT 0 COMMENT 'Whether actual demand has been recorded',
-  `created_at` timestamp NOT NULL DEFAULT current_timestamp()
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='Track forecast accuracy over time for continuous improvement';
+  `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
+  `stockout_affected` tinyint(1) DEFAULT 0 COMMENT 'V8.0: TRUE if stockout occurred during forecast period, causing under-sales',
+  `volatility_at_forecast` decimal(5,2) DEFAULT NULL COMMENT 'V8.0: coefficient_variation from sku_demand_stats at time of forecast',
+  `data_quality_score` decimal(3,2) DEFAULT NULL COMMENT 'V8.0: Data quality score (0.00-1.00) at time of forecast',
+  `seasonal_confidence_at_forecast` decimal(5,4) DEFAULT NULL COMMENT 'V8.0: confidence_level from seasonal_factors at time of forecast',
+  `learning_applied` tinyint(1) DEFAULT 0 COMMENT 'V8.0: TRUE if learning adjustment was applied to this SKU',
+  `learning_applied_date` timestamp NULL DEFAULT NULL COMMENT 'V8.0: When learning adjustment was applied',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `unique_forecast` (`sku_id`,`warehouse`,`forecast_date`,`forecast_period_start`),
+  KEY `idx_forecast_date` (`forecast_date`),
+  KEY `idx_warehouse_period` (`warehouse`,`forecast_period_start`,`is_actual_recorded`),
+  KEY `idx_sku_period` (`sku_id`,`forecast_period_start`),
+  KEY `idx_accuracy_metrics` (`is_actual_recorded`,`absolute_percentage_error`),
+  KEY `idx_abc_xyz_accuracy` (`abc_class`,`xyz_class`,`absolute_percentage_error`),
+  KEY `idx_learning_status` (`learning_applied`,`forecast_date`),
+  KEY `idx_period_recorded` (`forecast_period_start`,`is_actual_recorded`),
+  KEY `idx_sku_recorded` (`sku_id`,`is_actual_recorded`,`forecast_period_start`),
+  CONSTRAINT `forecast_accuracy_ibfk_1` FOREIGN KEY (`sku_id`) REFERENCES `skus` (`sku_id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='Track forecast accuracy over time for continuous improvement. V8.0: Enhanced with context fields and learning system support';
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `forecast_adjustments`
+--
+
+CREATE TABLE `forecast_adjustments` (
+  `id` int(11) NOT NULL,
+  `forecast_run_id` int(11) NOT NULL COMMENT 'Links to forecast_runs table',
+  `sku_id` varchar(50) NOT NULL COMMENT 'Links to skus table',
+  `warehouse` enum('burnaby','kentucky','combined') NOT NULL COMMENT 'Warehouse location',
+  `adjustment_type` enum('manual','event','promotion','phase_out') NOT NULL COMMENT 'Type of adjustment',
+  `month_affected` int(11) DEFAULT NULL COMMENT 'Month number (1-12) if single month affected',
+  `original_value` decimal(10,2) DEFAULT NULL COMMENT 'Original forecasted value',
+  `adjusted_value` decimal(10,2) DEFAULT NULL COMMENT 'New adjusted value',
+  `adjustment_reason` text DEFAULT NULL COMMENT 'User explanation for adjustment',
+  `adjusted_by` varchar(100) NOT NULL COMMENT 'User who made the adjustment',
+  `adjusted_at` timestamp NOT NULL DEFAULT current_timestamp() COMMENT 'When adjustment was made'
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='Log of manual forecast adjustments';
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `forecast_learning_adjustments`
+-- V8.0: System-learned adjustments separate from manual forecast_adjustments
+--
+
+CREATE TABLE `forecast_learning_adjustments` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `sku_id` varchar(50) NOT NULL,
+  `adjustment_type` enum('growth_rate','seasonal_factor','method_switch','volatility_adjustment','category_default') NOT NULL COMMENT 'Type of adjustment',
+  `original_value` decimal(10,4) DEFAULT NULL COMMENT 'Value before adjustment',
+  `adjusted_value` decimal(10,4) NOT NULL COMMENT 'Recommended value after adjustment',
+  `adjustment_magnitude` decimal(10,4) NOT NULL COMMENT 'Size of adjustment for tracking',
+  `learning_reason` text NOT NULL COMMENT 'Why this adjustment is recommended',
+  `confidence_score` decimal(3,2) NOT NULL COMMENT 'Confidence in this adjustment (0.00-1.00)',
+  `mape_before` decimal(5,2) DEFAULT NULL COMMENT 'MAPE before adjustment',
+  `mape_expected` decimal(5,2) DEFAULT NULL COMMENT 'Expected MAPE after adjustment',
+  `applied` tinyint(1) DEFAULT 0 COMMENT 'TRUE when adjustment is applied',
+  `applied_date` timestamp NULL DEFAULT NULL COMMENT 'When adjustment was applied',
+  `created_at` timestamp NOT NULL DEFAULT current_timestamp() COMMENT 'When learning system generated this',
+  PRIMARY KEY (`id`),
+  KEY `idx_applied` (`applied`,`created_at`),
+  KEY `idx_sku_type` (`sku_id`,`adjustment_type`),
+  KEY `idx_confidence` (`confidence_score`,`created_at`),
+  CONSTRAINT `forecast_learning_adjustments_ibfk_1` FOREIGN KEY (`sku_id`) REFERENCES `skus` (`sku_id`) ON DELETE CASCADE ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='V8.0: System-learned adjustments to forecast parameters based on accuracy analysis';
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `forecast_details`
+--
+
+CREATE TABLE `forecast_details` (
+  `id` int(11) NOT NULL,
+  `forecast_run_id` int(11) NOT NULL COMMENT 'Links to forecast_runs table',
+  `sku_id` varchar(50) NOT NULL COMMENT 'Links to skus table',
+  `warehouse` enum('burnaby','kentucky','combined') NOT NULL COMMENT 'Warehouse location',
+  `month_1_qty` int(11) DEFAULT 0 COMMENT 'Forecast quantity for month 1',
+  `month_2_qty` int(11) DEFAULT 0 COMMENT 'Forecast quantity for month 2',
+  `month_3_qty` int(11) DEFAULT 0 COMMENT 'Forecast quantity for month 3',
+  `month_4_qty` int(11) DEFAULT 0 COMMENT 'Forecast quantity for month 4',
+  `month_5_qty` int(11) DEFAULT 0 COMMENT 'Forecast quantity for month 5',
+  `month_6_qty` int(11) DEFAULT 0 COMMENT 'Forecast quantity for month 6',
+  `month_7_qty` int(11) DEFAULT 0 COMMENT 'Forecast quantity for month 7',
+  `month_8_qty` int(11) DEFAULT 0 COMMENT 'Forecast quantity for month 8',
+  `month_9_qty` int(11) DEFAULT 0 COMMENT 'Forecast quantity for month 9',
+  `month_10_qty` int(11) DEFAULT 0 COMMENT 'Forecast quantity for month 10',
+  `month_11_qty` int(11) DEFAULT 0 COMMENT 'Forecast quantity for month 11',
+  `month_12_qty` int(11) DEFAULT 0 COMMENT 'Forecast quantity for month 12',
+  `month_1_rev` decimal(12,2) DEFAULT 0.00 COMMENT 'Forecast revenue for month 1',
+  `month_2_rev` decimal(12,2) DEFAULT 0.00 COMMENT 'Forecast revenue for month 2',
+  `month_3_rev` decimal(12,2) DEFAULT 0.00 COMMENT 'Forecast revenue for month 3',
+  `month_4_rev` decimal(12,2) DEFAULT 0.00 COMMENT 'Forecast revenue for month 4',
+  `month_5_rev` decimal(12,2) DEFAULT 0.00 COMMENT 'Forecast revenue for month 5',
+  `month_6_rev` decimal(12,2) DEFAULT 0.00 COMMENT 'Forecast revenue for month 6',
+  `month_7_rev` decimal(12,2) DEFAULT 0.00 COMMENT 'Forecast revenue for month 7',
+  `month_8_rev` decimal(12,2) DEFAULT 0.00 COMMENT 'Forecast revenue for month 8',
+  `month_9_rev` decimal(12,2) DEFAULT 0.00 COMMENT 'Forecast revenue for month 9',
+  `month_10_rev` decimal(12,2) DEFAULT 0.00 COMMENT 'Forecast revenue for month 10',
+  `month_11_rev` decimal(12,2) DEFAULT 0.00 COMMENT 'Forecast revenue for month 11',
+  `month_12_rev` decimal(12,2) DEFAULT 0.00 COMMENT 'Forecast revenue for month 12',
+  `total_qty_forecast` int(11) GENERATED ALWAYS AS (`month_1_qty` + `month_2_qty` + `month_3_qty` + `month_4_qty` + `month_5_qty` + `month_6_qty` + `month_7_qty` + `month_8_qty` + `month_9_qty` + `month_10_qty` + `month_11_qty` + `month_12_qty`) STORED COMMENT 'Total forecasted quantity for 12 months',
+  `total_rev_forecast` decimal(14,2) GENERATED ALWAYS AS (`month_1_rev` + `month_2_rev` + `month_3_rev` + `month_4_rev` + `month_5_rev` + `month_6_rev` + `month_7_rev` + `month_8_rev` + `month_9_rev` + `month_10_rev` + `month_11_rev` + `month_12_rev`) STORED COMMENT 'Total forecasted revenue for 12 months',
+  `avg_monthly_qty` decimal(10,2) GENERATED ALWAYS AS (`total_qty_forecast` / 12) STORED COMMENT 'Average monthly quantity',
+  `avg_monthly_rev` decimal(12,2) GENERATED ALWAYS AS (`total_rev_forecast` / 12) STORED COMMENT 'Average monthly revenue',
+  `base_demand_used` decimal(10,2) DEFAULT NULL COMMENT 'Base monthly demand before adjustments',
+  `seasonal_pattern_applied` varchar(20) DEFAULT NULL COMMENT 'Seasonal pattern type applied',
+  `growth_rate_applied` decimal(5,2) DEFAULT 0.00 COMMENT 'Growth rate used in forecast',
+  `growth_rate_source` enum('manual_override','default','new_sku_methodology','proven_demand_stockout','sku_trend','sku_trend_X','sku_trend_Y','sku_trend_Z','sku_trend_X_seasonal','sku_trend_Y_seasonal','sku_trend_Z_seasonal','growth_status','growth_status_X','growth_status_Y','growth_status_Z','growth_status_X_seasonal','growth_status_Y_seasonal','growth_status_Z_seasonal','category_trend','category_trend_X','category_trend_Y','category_trend_Z','category_trend_X_seasonal','category_trend_Y_seasonal','category_trend_Z_seasonal') DEFAULT 'default',
+  `confidence_score` decimal(3,2) DEFAULT 0.00 COMMENT 'Forecast confidence (0-1 scale)',
+  `method_used` varchar(50) DEFAULT NULL COMMENT 'Forecasting method based on ABC/XYZ',
+  `manual_override` tinyint(1) DEFAULT 0 COMMENT 'Whether user manually adjusted',
+  `override_reason` text DEFAULT NULL COMMENT 'Reason for manual adjustment'
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='Detailed monthly forecasts for each SKU and warehouse';
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `forecast_runs`
+--
+
+CREATE TABLE `forecast_runs` (
+  `id` int(11) NOT NULL,
+  `forecast_name` varchar(100) NOT NULL COMMENT 'User-friendly name for this forecast',
+  `forecast_date` date NOT NULL COMMENT 'Date when forecast was generated',
+  `forecast_type` enum('monthly','quarterly','annual') DEFAULT 'monthly' COMMENT 'Forecast granularity',
+  `warehouse` enum('burnaby','kentucky','combined') DEFAULT 'combined',
+  `status` enum('pending','queued','running','completed','failed','cancelled') DEFAULT 'pending' COMMENT 'Current status of forecast generation',
+  `queue_position` int(11) DEFAULT NULL COMMENT 'Position in forecast generation queue (NULL if not queued)',
+  `growth_assumption` decimal(5,2) DEFAULT 0.00 COMMENT 'Manual growth rate override (percentage)',
+  `created_by` varchar(100) DEFAULT 'system' COMMENT 'User who created this forecast',
+  `created_at` timestamp NOT NULL DEFAULT current_timestamp() COMMENT 'Timestamp of forecast creation',
+  `queued_at` timestamp NULL DEFAULT NULL COMMENT 'Timestamp when forecast was added to queue',
+  `started_at` timestamp NULL DEFAULT NULL COMMENT 'When forecast generation started',
+  `completed_at` timestamp NULL DEFAULT NULL COMMENT 'When forecast generation completed',
+  `approved_by` varchar(100) DEFAULT NULL COMMENT 'User who approved this forecast',
+  `approved_at` timestamp NULL DEFAULT NULL COMMENT 'When forecast was approved',
+  `notes` text DEFAULT NULL COMMENT 'User notes about this forecast',
+  `total_skus` int(11) DEFAULT 0 COMMENT 'Total SKUs to process',
+  `processed_skus` int(11) DEFAULT 0 COMMENT 'SKUs processed so far',
+  `failed_skus` int(11) DEFAULT 0 COMMENT 'SKUs that failed to process',
+  `duration_seconds` decimal(8,2) DEFAULT NULL COMMENT 'Total processing time in seconds',
+  `error_message` text DEFAULT NULL COMMENT 'Error details if status is failed'
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='Master table tracking forecast generation runs';
 
 -- --------------------------------------------------------
 
@@ -976,6 +1121,37 @@ ALTER TABLE `forecast_accuracy`
   ADD KEY `idx_abc_xyz_accuracy` (`abc_class`,`xyz_class`,`absolute_percentage_error`);
 
 --
+-- Indexes for table `forecast_adjustments`
+--
+ALTER TABLE `forecast_adjustments`
+  ADD PRIMARY KEY (`id`),
+  ADD KEY `idx_adjustment_run` (`forecast_run_id`),
+  ADD KEY `idx_adjustment_sku` (`sku_id`),
+  ADD KEY `idx_adjustment_type` (`adjustment_type`),
+  ADD KEY `idx_adjusted_at` (`adjusted_at`);
+
+--
+-- Indexes for table `forecast_details`
+--
+ALTER TABLE `forecast_details`
+  ADD PRIMARY KEY (`id`),
+  ADD KEY `sku_id` (`sku_id`),
+  ADD KEY `idx_forecast_sku` (`forecast_run_id`,`sku_id`,`warehouse`),
+  ADD KEY `idx_warehouse` (`warehouse`),
+  ADD KEY `idx_confidence` (`confidence_score`);
+
+--
+-- Indexes for table `forecast_runs`
+--
+ALTER TABLE `forecast_runs`
+  ADD PRIMARY KEY (`id`),
+  ADD KEY `idx_forecast_status` (`status`),
+  ADD KEY `idx_forecast_date` (`forecast_date`),
+  ADD KEY `idx_created_at` (`created_at`),
+  ADD KEY `idx_queue_position` (`queue_position`),
+  ADD KEY `idx_queued_at` (`queued_at`);
+
+--
 -- Indexes for table `inventory_current`
 --
 ALTER TABLE `inventory_current`
@@ -1166,6 +1342,24 @@ ALTER TABLE `forecast_accuracy`
   MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
 
 --
+-- AUTO_INCREMENT for table `forecast_adjustments`
+--
+ALTER TABLE `forecast_adjustments`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
+
+--
+-- AUTO_INCREMENT for table `forecast_details`
+--
+ALTER TABLE `forecast_details`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
+
+--
+-- AUTO_INCREMENT for table `forecast_runs`
+--
+ALTER TABLE `forecast_runs`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
+
+--
 -- AUTO_INCREMENT for table `pending_inventory`
 --
 ALTER TABLE `pending_inventory`
@@ -1228,6 +1422,20 @@ ALTER TABLE `transfer_history`
 --
 ALTER TABLE `forecast_accuracy`
   ADD CONSTRAINT `forecast_accuracy_ibfk_1` FOREIGN KEY (`sku_id`) REFERENCES `skus` (`sku_id`) ON DELETE CASCADE;
+
+--
+-- Constraints for table `forecast_adjustments`
+--
+ALTER TABLE `forecast_adjustments`
+  ADD CONSTRAINT `forecast_adjustments_ibfk_1` FOREIGN KEY (`forecast_run_id`) REFERENCES `forecast_runs` (`id`) ON DELETE CASCADE,
+  ADD CONSTRAINT `forecast_adjustments_ibfk_2` FOREIGN KEY (`sku_id`) REFERENCES `skus` (`sku_id`) ON DELETE CASCADE;
+
+--
+-- Constraints for table `forecast_details`
+--
+ALTER TABLE `forecast_details`
+  ADD CONSTRAINT `forecast_details_ibfk_1` FOREIGN KEY (`forecast_run_id`) REFERENCES `forecast_runs` (`id`) ON DELETE CASCADE,
+  ADD CONSTRAINT `forecast_details_ibfk_2` FOREIGN KEY (`sku_id`) REFERENCES `skus` (`sku_id`) ON DELETE CASCADE;
 
 --
 -- Constraints for table `inventory_current`

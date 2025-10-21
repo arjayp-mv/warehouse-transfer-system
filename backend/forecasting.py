@@ -20,8 +20,11 @@ from typing import Dict, List, Tuple, Optional
 from datetime import datetime, date, timedelta
 from decimal import Decimal
 import statistics
+import logging
 from backend.database import execute_query
 from backend.seasonal_calculator import get_monthly_factors, calculate_seasonal_pattern
+
+logger = logging.getLogger(__name__)
 
 
 class ForecastEngine:
@@ -636,6 +639,8 @@ class ForecastEngine:
         """
         Save forecast results to forecast_details table.
 
+        MODIFIED V8.0: Now also records to forecast_accuracy for learning system.
+
         Args:
             forecast_data: Forecast dictionary from generate_forecast_for_sku()
 
@@ -686,7 +691,26 @@ class ForecastEngine:
         )
 
         try:
+            # Save to forecast_details (existing functionality)
             execute_query(query, params, fetch_all=False)
+
+            # V8.0: Record to forecast_accuracy for learning system
+            from backend.forecast_accuracy import record_forecast_for_accuracy_tracking
+
+            success = record_forecast_for_accuracy_tracking(
+                forecast_run_id=self.forecast_run_id,
+                sku_id=forecast_data['sku_id'],
+                warehouse=forecast_data['warehouse'],
+                forecast_data=forecast_data
+            )
+
+            if success:
+                logger.info(f"Forecast recorded to forecast_accuracy for {forecast_data['sku_id']}")
+            else:
+                logger.warning(
+                    f"Failed to record forecast_accuracy for {forecast_data['sku_id']} (non-critical)"
+                )
+
             return True
         except Exception as e:
             print(f"Error saving forecast for {forecast_data['sku_id']}: {e}")
