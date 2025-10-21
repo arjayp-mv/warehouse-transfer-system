@@ -1120,15 +1120,18 @@ A task is complete when:
   - Track actuals_found count, missing_actuals count, errors_list
   - **COMPLETED**: Implemented in TASK-526 (lines 428-475)
 
-- [ ] **TASK-532**: Create backend/run_monthly_accuracy_update.py scheduler script
+- [x] **TASK-532**: Create backend/run_monthly_accuracy_update.py scheduler script
   - Standalone script for Windows Task Scheduler or cron
   - Configure logging to file: logs/forecast_accuracy_update.log
   - Main function: call update_monthly_accuracy(), log results
   - Log: month_updated, total_forecasts, actuals_found, missing_actuals, avg_mape
   - If errors: log first 10 errors with details
   - Exit with sys.exit(1) on fatal error, sys.exit(0) on success
+  - **COMPLETED**: Script created (95 lines) with dual logging, argparse support, and proper error handling
+  - Can be run manually: python backend/run_monthly_accuracy_update.py [--month YYYY-MM]
+  - Or scheduled via Windows Task Scheduler / cron (OPTIONAL)
 
-- [ ] **TASK-533**: Add manual trigger API endpoint
+- [x] **TASK-533**: Add manual trigger API endpoint
   - Route: POST /api/forecasts/accuracy/update in forecasting_api.py
   - Query param: target_month (optional, default last month)
   - Import update_monthly_accuracy from backend.forecast_accuracy
@@ -1136,14 +1139,17 @@ A task is complete when:
   - HTTPException 400 if invalid month format
   - HTTPException 500 if update fails
   - Log manual trigger: "Manual accuracy update triggered for: {target_month}"
+  - **COMPLETED**: Endpoint added to forecasting_api.py (lines 776-848)
+  - Returns detailed update statistics with MAPE and stockout-affected count
+  - Enables UI-based manual triggering without scheduler setup
 
-- [ ] **TASK-534**: Set up Windows Task Scheduler job (or document cron setup)
-  - Create run_accuracy_update.bat batch file
-  - Content: cd project_dir && venv\Scripts\python.exe backend\run_monthly_accuracy_update.py
-  - Windows Task Scheduler: Monthly trigger on 1st day at 2:00 AM
-  - Action: Run run_accuracy_update.bat
-  - Document setup steps in deployment checklist
-  - Alternative: Add to backend/scheduler.py if using Python scheduler
+- [ ] **TASK-534**: OPTIONAL - Set up automated scheduler (Windows Task Scheduler or cron)
+  - **NOTE**: This task is OPTIONAL for deployment. Recommended approach is manual UI trigger.
+  - **Deployment Strategy**: User triggers accuracy update via dashboard button after uploading monthly sales data
+  - **No IT/Developer Required**: API endpoint (TASK-533) enables UI-based triggering without scheduler setup
+  - **If automation desired later**: Document setup steps for Windows Task Scheduler or cron
+  - Create run_accuracy_update.bat: cd project_dir && venv\Scripts\python.exe backend\run_monthly_accuracy_update.py
+  - Schedule monthly on 1st day at 2:00 AM if full automation needed
 
 - [ ] **TASK-535**: Create backend/test_accuracy_update.py test script
   - Manually choose test_month with both forecasts and actuals (e.g., previous month)

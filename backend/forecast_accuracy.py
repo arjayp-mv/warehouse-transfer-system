@@ -355,7 +355,7 @@ def update_monthly_accuracy(target_month: Optional[str] = None) -> Dict:
             kentucky_sales,
             burnaby_stockout_days + kentucky_stockout_days as total_stockout_days
         FROM monthly_sales
-        WHERE year_month = %s
+        WHERE `year_month` = %s
     """
 
     try:
@@ -441,6 +441,13 @@ def update_monthly_accuracy(target_month: Optional[str] = None) -> Dict:
                             is_actual_recorded = 1
                         WHERE id = %s
                     """
+                    # Note: stockout_affected is hard-coded to TRUE in query above
+                    execute_query(
+                        update_query,
+                        (actual, absolute_error, percentage_error,
+                         absolute_percentage_error, forecast['id']),
+                        fetch_all=False
+                    )
                     stockout_affected_count += 1
                     # Don't add to mape_values (exclude from accuracy metrics)
                 else:
@@ -455,14 +462,13 @@ def update_monthly_accuracy(target_month: Optional[str] = None) -> Dict:
                             is_actual_recorded = 1
                         WHERE id = %s
                     """
+                    execute_query(
+                        update_query,
+                        (actual, absolute_error, percentage_error,
+                         absolute_percentage_error, stockout_affected, forecast['id']),
+                        fetch_all=False
+                    )
                     mape_values.append(absolute_percentage_error)
-
-                execute_query(
-                    update_query,
-                    (actual, absolute_error, percentage_error,
-                     absolute_percentage_error, stockout_affected, forecast['id']),
-                    fetch_all=False
-                )
 
                 actuals_found += 1
 

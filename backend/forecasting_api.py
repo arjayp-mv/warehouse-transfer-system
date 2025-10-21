@@ -11,6 +11,7 @@ Key Endpoints:
 - GET /api/forecasts/runs/{run_id}/export - Export forecast to CSV
 - POST /api/forecasts/runs/{run_id}/cancel - Cancel running forecast
 - GET /api/forecasts/sku/{sku_id} - Get forecasts for specific SKU
+- POST /api/forecasts/accuracy/update - Update forecast accuracy metrics (V8.0)
 """
 
 from fastapi import APIRouter, HTTPException, Query
@@ -771,3 +772,78 @@ async def get_historical_data(run_id: int, sku_id: str):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to fetch historical data: {str(e)}")
+
+
+@router.post("/accuracy/update", response_model=Dict)
+async def trigger_accuracy_update(target_month: Optional[str] = None):
+    """
+    Manually trigger accuracy update for a specific month.
+
+    V8.0 Phase 2: Stockout-aware forecast accuracy tracking.
+
+    Compares actual sales to forecast predictions and calculates accuracy metrics.
+    Excludes stockout-affected periods from MAPE calculations to avoid unfairly
+    penalizing forecasts when stockouts prevented sales.
+
+    Useful for:
+    - Testing accuracy calculations
+    - Backfilling historical data
+    - Re-running failed updates
+    - Manual trigger after uploading monthly sales data
+
+    Args:
+        target_month: Month in 'YYYY-MM' format (default: last month)
+
+    Returns:
+        Update statistics including MAPE and stockout-affected count
+
+    Raises:
+        400: Invalid month format
+        500: Update failed
+
+    Example:
+        POST /api/forecasts/accuracy/update
+        (updates last month)
+
+        POST /api/forecasts/accuracy/update?target_month=2025-10
+        (updates October 2025)
+
+    Response:
+        {
+            "message": "Accuracy update completed",
+            "details": {
+                "month_updated": "2025-10",
+                "total_forecasts": 1768,
+                "actuals_found": 1650,
+                "missing_actuals": 118,
+                "avg_mape": 12.5,
+                "stockout_affected_count": 45
+            }
+        }
+    """
+    from backend.forecast_accuracy import update_monthly_accuracy
+
+    try:
+        logger.info(f"API: Manual accuracy update triggered for: {target_month or 'last month'}")
+
+        # Call the accuracy update function
+        result = update_monthly_accuracy(target_month=target_month)
+
+        # Check for errors in result
+        if 'error' in result:
+            raise HTTPException(status_code=400, detail=result['error'])
+
+        logger.info(f"API: Accuracy update completed for {result.get('month_updated')}")
+        logger.info(f"API: Updated {result.get('actuals_found')} forecasts, Avg MAPE: {result.get('avg_mape', 0):.2f}%")
+
+        return {
+            "message": "Accuracy update completed",
+            "details": result
+        }
+
+    except HTTPException:
+        # Re-raise HTTP exceptions as-is
+        raise
+    except Exception as e:
+        logger.error(f"API: Accuracy update failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Accuracy update failed: {str(e)}")
