@@ -207,14 +207,93 @@ warehouse-transfer/
 
 ## Task Management Protocol
 
-### TASKS.md Maintenance (Critical!)
-**Always keep TASKS.md current** - it's the single source of truth for project progress:
+### TASKS.md Archive Structure (Updated 2025-10-18)
 
-- **After Each Task**: Mark completed tasks as done immediately ✅
-- **New Tasks Discovered**: Add to TASKS.md as they arise during development
-- **Daily Updates**: Review and update task statuses at end of each work session
-- **Weekly Review**: Adjust timeline based on actual progress vs. estimates
-- **Blockers**: Document any blocking issues that prevent task completion
+The project now uses an archive-based task tracking system to maintain manageable file sizes while preserving complete historical details.
+
+**Current Structure**:
+- **TASKS.md** (main file): High-level summaries and current status (under 400 lines)
+- **TASKS_ARCHIVE_V1-V4.md**: Foundation and Transfer Planning (Tasks 001-100)
+- **TASKS_ARCHIVE_V5.md**: Supplier Analytics System (Tasks 101-175)
+- **TASKS_ARCHIVE_V6.md**: Sales and SKU Analytics (Tasks 176-377)
+
+### Managing Future Tasks
+
+#### When Starting a New Major Version (V7.0+)
+
+If you need to add a new major feature or version:
+
+1. **Add to Main TASKS.md**:
+   - Create a new version section with high-level summary (3-4 paragraphs)
+   - List key features to be delivered
+   - Include task range (e.g., Tasks 378-450)
+   - Add link placeholder to future archive file
+
+2. **Work on Tasks**:
+   - Track detailed tasks in main TASKS.md during active development
+   - Use standard task format with clear descriptions
+   - Mark tasks as completed immediately after finishing
+
+3. **When Version Completes** (or main TASKS.md exceeds 400 lines):
+   - Create new archive file: `TASKS_ARCHIVE_V7.md`
+   - Move detailed task lists to archive with full context
+   - Replace detail in main TASKS.md with summary and archive link
+   - Update "Archive Navigation" section in main TASKS.md
+
+#### Example: Adding V7.0 Advanced Forecasting
+
+**Step 1**: Add to main TASKS.md
+```markdown
+## V7.0: Advanced Demand Forecasting System (IN PROGRESS)
+
+Summary: Machine learning-based demand forecasting using historical
+sales patterns, seasonal trends, and external factors.
+
+Key Features to Deliver:
+- Time series analysis with ARIMA/Prophet models
+- Seasonal decomposition and trend detection
+- Forecast confidence intervals
+- Integration with transfer planning
+
+Task Range: TASK-378 to TASK-425
+
+Detailed Documentation: [TASKS_ARCHIVE_V7.md](TASKS_ARCHIVE_V7.md)
+(when completed)
+```
+
+**Step 2**: Track tasks during development
+```markdown
+### Phase 1: Data Preparation
+- [ ] TASK-378: Create forecasting database schema
+- [ ] TASK-379: Implement data aggregation pipeline
+- [x] TASK-380: Add seasonal decomposition functions
+```
+
+**Step 3**: When complete, create archive and update main file
+
+### Task Naming Conventions
+
+**Continue Sequential Numbering**:
+- Last completed task: TASK-377
+- Next new task: TASK-378
+- Format: `TASK-XXX: Brief description`
+
+**Version Naming**:
+- Major new feature: V7.0, V8.0, etc.
+- Bug fixes/enhancements: V7.1, V7.2, etc.
+- Critical fixes: V7.1.1, V7.1.2, etc.
+
+### File Size Management Rules
+
+**Main TASKS.md**:
+- Target: 300-400 lines
+- Maximum: 500 lines
+- When exceeding 400 lines: Archive oldest completed version
+
+**Archive Files**:
+- No strict limit (typically 350-650 lines)
+- One archive per major version or logical grouping
+- Include complete task details, code examples, technical notes
 
 ### Task Status Format
 Use clear status indicators in TASKS.md:
@@ -226,13 +305,75 @@ Use clear status indicators in TASKS.md:
 - [?] **TASK-005**: Needs clarification from stakeholder
 ```
 
+### Archive File Template
+
+When creating a new archive file, use this structure:
+
+```markdown
+# Warehouse Transfer Planning Tool - VX.X Archive
+
+Task Range: TASK-XXX to TASK-XXX
+Status: ALL COMPLETED
+Archive Date: YYYY-MM-DD
+
+---
+
+## VX.0: Feature Name
+
+Feature Overview:
+[2-3 paragraph description]
+
+### Phase 1: [Phase Name]
+Completed Tasks:
+- [x] TASK-XXX: Description with technical details
+- [x] TASK-XXX: Description
+
+Implementation Details:
+[Code examples, algorithms, key decisions]
+
+### Phase 2: [Phase Name]
+[Continue pattern...]
+
+---
+
+## Summary of VX.X Achievements
+
+Key Features Delivered:
+- Feature 1 with business impact
+- Feature 2 with technical achievement
+
+Business Impact:
+[Quantifiable results]
+
+Technical Achievements:
+[Performance, code quality, etc.]
+
+---
+
+Previous Features: [Link to earlier archive]
+Next Evolution: [Link to next archive]
+Return to Main Tracker: [TASKS.md](TASKS.md)
+```
+
 ### When Tasks Change During Development
 - **Scope Increase**: Add new tasks with clear dependencies
 - **Complexity Changes**: Break large tasks into smaller subtasks
-- **Timeline Impact**: Update weekly milestones if needed
+- **Timeline Impact**: Update version milestones if needed
 - **Dependencies**: Note which tasks block others
+- **Archive Timing**: Move to archive when version completes OR file size exceeds limits
 
-This ensures TASKS.md remains the accurate project roadmap and progress tracker.
+### Maintenance Checklist
+
+Before committing changes:
+- [ ] Main TASKS.md is under 400 lines
+- [ ] All completed tasks marked with [x]
+- [ ] Version summaries are accurate and concise
+- [ ] Archive links are correct and functional
+- [ ] New tasks follow sequential numbering
+- [ ] No emojis in task descriptions (project standard)
+- [ ] Business impact clearly stated for each version
+
+This archive structure ensures TASKS.md remains maintainable while preserving complete project history.
 
 ## Code Documentation Standards
 

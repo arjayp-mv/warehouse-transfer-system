@@ -125,6 +125,24 @@
         .alert-high { border-left-color: #dc3545; }
         .alert-medium { border-left-color: #ffc107; }
         .alert-low { border-left-color: #17a2b8; }
+
+        /* Collapsible alerts */
+        .alerts-collapsible {
+            overflow: hidden;
+            transition: max-height 0.3s ease-out;
+        }
+
+        .alerts-collapsed .alerts-collapsible {
+            max-height: 0;
+        }
+
+        #alerts-chevron {
+            transition: transform 0.3s ease;
+        }
+
+        .alerts-collapsed #alerts-chevron {
+            transform: rotate(180deg);
+        }
     </style>
 </head>
 <body class="bg-light">
@@ -260,11 +278,16 @@
         <!-- Alerts Section -->
         <div class="dashboard-section" id="alerts-section">
             <div class="section-header">
-                <h5 class="mb-0">
-                    <i class="fas fa-exclamation-triangle me-2 text-warning"></i>Performance Alerts
-                </h5>
+                <div class="d-flex justify-content-between align-items-center">
+                    <h5 class="mb-0">
+                        <i class="fas fa-exclamation-triangle me-2 text-warning"></i>Performance Alerts
+                    </h5>
+                    <button class="btn btn-outline-secondary btn-sm" onclick="toggleAlertsCollapse()" id="alerts-toggle-btn">
+                        <i class="fas fa-chevron-up" id="alerts-chevron"></i> Collapse
+                    </button>
+                </div>
             </div>
-            <div id="alerts-container">
+            <div id="alerts-container" class="alerts-collapsible">
                 <div class="loading-spinner">
                     <div class="spinner-border text-primary" role="status">
                         <span class="visually-hidden">Loading alerts...</span>
@@ -398,6 +421,84 @@
         </div>
     </div>
 
+    <!-- All Alerts Modal -->
+    <div class="modal fade" id="all-alerts-modal" tabindex="-1">
+        <div class="modal-dialog modal-xl">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">
+                        <i class="fas fa-exclamation-triangle me-2 text-warning"></i>All Performance Alerts
+                    </h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <!-- Filter Controls -->
+                    <div class="row mb-3">
+                        <div class="col-md-4">
+                            <label for="modal-severity-filter" class="form-label">Filter by Severity:</label>
+                            <select id="modal-severity-filter" class="form-select" onchange="filterModalAlerts()">
+                                <option value="">All Severities</option>
+                                <option value="HIGH">High Priority</option>
+                                <option value="MEDIUM">Medium Priority</option>
+                                <option value="LOW">Low Priority</option>
+                            </select>
+                        </div>
+                        <div class="col-md-4">
+                            <label for="modal-alert-search" class="form-label">Search Suppliers:</label>
+                            <input type="text" id="modal-alert-search" class="form-control" placeholder="Search by supplier name..." oninput="searchModalAlerts()">
+                        </div>
+                        <div class="col-md-4 d-flex align-items-end">
+                            <button class="btn btn-outline-success me-2" onclick="exportAllAlerts()">
+                                <i class="fas fa-download me-1"></i>Export CSV
+                            </button>
+                            <button class="btn btn-outline-secondary" onclick="clearModalFilters()">
+                                <i class="fas fa-times me-1"></i>Clear Filters
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Alerts Container -->
+                    <div id="modal-alerts-container">
+                        <div class="loading-spinner">
+                            <div class="spinner-border text-primary" role="status">
+                                <span class="visually-hidden">Loading all alerts...</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Alert Summary -->
+                    <div class="row mt-3">
+                        <div class="col-12">
+                            <div class="alert alert-info">
+                                <div class="row text-center">
+                                    <div class="col-md-3">
+                                        <strong id="modal-high-count">0</strong><br>
+                                        <small class="text-danger">High Priority</small>
+                                    </div>
+                                    <div class="col-md-3">
+                                        <strong id="modal-medium-count">0</strong><br>
+                                        <small class="text-warning">Medium Priority</small>
+                                    </div>
+                                    <div class="col-md-3">
+                                        <strong id="modal-low-count">0</strong><br>
+                                        <small class="text-info">Low Priority</small>
+                                    </div>
+                                    <div class="col-md-3">
+                                        <strong id="modal-total-count">0</strong><br>
+                                        <small class="text-muted">Total Alerts</small>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Bootstrap JS -->
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <!-- jQuery -->
@@ -424,12 +525,14 @@
         let currentPeriod = 12;
         let currentSupplierData = null;
         let performanceChart = null;
+        let allAlertsData = [];
 
         /**
          * Initialize dashboard when page loads
          */
         document.addEventListener('DOMContentLoaded', function() {
             initializeDashboard();
+            loadAlertsCollapseState();
         });
 
         /**
@@ -1030,9 +1133,220 @@
             URL.revokeObjectURL(url);
         }
 
-        function showAllAlerts() {
-            // This could open a separate page or modal with all alerts
-            alert('Feature coming soon: View all alerts in detailed format');
+        /**
+         * Show all alerts in a detailed modal
+         */
+        async function showAllAlerts() {
+            const modal = new bootstrap.Modal(document.getElementById('all-alerts-modal'));
+            modal.show();
+
+            try {
+                const response = await fetch('/api/supplier/alerts');
+                if (!response.ok) throw new Error('Failed to fetch all alerts');
+
+                const data = await response.json();
+                allAlertsData = data.alerts || [];
+
+                displayAllAlertsInModal(allAlertsData);
+                updateModalAlertCounts(allAlertsData);
+
+            } catch (error) {
+                console.error('Error loading all alerts:', error);
+                document.getElementById('modal-alerts-container').innerHTML = `
+                    <div class="alert alert-danger">
+                        <i class="fas fa-exclamation-triangle me-2"></i>
+                        Failed to load alerts: ${error.message}
+                    </div>
+                `;
+            }
+        }
+
+        /**
+         * Display alerts in the modal
+         */
+        function displayAllAlertsInModal(alerts) {
+            const container = document.getElementById('modal-alerts-container');
+
+            if (alerts.length === 0) {
+                container.innerHTML = `
+                    <div class="text-center py-4 text-muted">
+                        <i class="fas fa-check-circle fa-3x mb-3"></i>
+                        <h5>No Performance Alerts</h5>
+                        <p>All suppliers are performing well!</p>
+                    </div>
+                `;
+                return;
+            }
+
+            let alertsHtml = '';
+            alerts.forEach((alert, index) => {
+                const alertClass = alert.severity.toLowerCase();
+                const iconClass = alert.severity === 'HIGH' ? 'fas fa-exclamation-triangle' :
+                                 alert.severity === 'MEDIUM' ? 'fas fa-exclamation-circle' :
+                                 'fas fa-info-circle';
+                const badgeColor = alert.severity === 'HIGH' ? 'danger' :
+                                  alert.severity === 'MEDIUM' ? 'warning' : 'info';
+
+                alertsHtml += `
+                    <div class="alert alert-custom alert-${alertClass} mb-3" data-severity="${alert.severity}" data-supplier="${alert.supplier.toLowerCase()}">
+                        <div class="d-flex align-items-start">
+                            <div class="me-3">
+                                <i class="${iconClass} fa-lg"></i>
+                            </div>
+                            <div class="flex-grow-1">
+                                <div class="d-flex justify-content-between align-items-start mb-2">
+                                    <h6 class="mb-0"><strong>${alert.supplier}</strong></h6>
+                                    <span class="badge bg-${badgeColor}">${alert.severity}</span>
+                                </div>
+                                <p class="mb-2">${alert.message}</p>
+                                <div class="row text-muted small">
+                                    <div class="col-md-6">
+                                        <i class="fas fa-lightbulb me-1"></i>
+                                        <strong>Action:</strong> ${alert.action}
+                                    </div>
+                                    <div class="col-md-6">
+                                        <i class="fas fa-clock me-1"></i>
+                                        <strong>Alert #${index + 1}</strong>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            });
+
+            container.innerHTML = alertsHtml;
+        }
+
+        /**
+         * Update modal alert counts
+         */
+        function updateModalAlertCounts(alerts) {
+            const counts = {
+                HIGH: 0,
+                MEDIUM: 0,
+                LOW: 0,
+                total: alerts.length
+            };
+
+            alerts.forEach(alert => {
+                counts[alert.severity] = (counts[alert.severity] || 0) + 1;
+            });
+
+            document.getElementById('modal-high-count').textContent = counts.HIGH || 0;
+            document.getElementById('modal-medium-count').textContent = counts.MEDIUM || 0;
+            document.getElementById('modal-low-count').textContent = counts.LOW || 0;
+            document.getElementById('modal-total-count').textContent = counts.total;
+        }
+
+        /**
+         * Filter alerts in modal by severity
+         */
+        function filterModalAlerts() {
+            const severity = document.getElementById('modal-severity-filter').value;
+            const searchTerm = document.getElementById('modal-alert-search').value.toLowerCase();
+
+            let filteredAlerts = allAlertsData;
+
+            if (severity) {
+                filteredAlerts = filteredAlerts.filter(alert => alert.severity === severity);
+            }
+
+            if (searchTerm) {
+                filteredAlerts = filteredAlerts.filter(alert =>
+                    alert.supplier.toLowerCase().includes(searchTerm)
+                );
+            }
+
+            displayAllAlertsInModal(filteredAlerts);
+            updateModalAlertCounts(filteredAlerts);
+        }
+
+        /**
+         * Search alerts in modal by supplier name
+         */
+        function searchModalAlerts() {
+            filterModalAlerts();
+        }
+
+        /**
+         * Clear all filters in modal
+         */
+        function clearModalFilters() {
+            document.getElementById('modal-severity-filter').value = '';
+            document.getElementById('modal-alert-search').value = '';
+            displayAllAlertsInModal(allAlertsData);
+            updateModalAlertCounts(allAlertsData);
+        }
+
+        /**
+         * Export all alerts as CSV
+         */
+        function exportAllAlerts() {
+            if (!allAlertsData || allAlertsData.length === 0) {
+                alert('No alerts data to export');
+                return;
+            }
+
+            const csvContent = [
+                ['Supplier', 'Severity', 'Message', 'Recommended Action'].join(','),
+                ...allAlertsData.map(alert => [
+                    `"${alert.supplier}"`,
+                    alert.severity,
+                    `"${alert.message}"`,
+                    `"${alert.action}"`
+                ].join(','))
+            ].join('\n');
+
+            const blob = new Blob([csvContent], { type: 'text/csv' });
+            const url = URL.createObjectURL(blob);
+
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `supplier_alerts_${new Date().toISOString().split('T')[0]}.csv`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }
+
+        /**
+         * Toggle alerts section collapse
+         */
+        function toggleAlertsCollapse() {
+            const alertsSection = document.getElementById('alerts-section');
+            const chevron = document.getElementById('alerts-chevron');
+            const toggleBtn = document.getElementById('alerts-toggle-btn');
+
+            const isCollapsed = alertsSection.classList.contains('alerts-collapsed');
+
+            if (isCollapsed) {
+                alertsSection.classList.remove('alerts-collapsed');
+                chevron.className = 'fas fa-chevron-up';
+                toggleBtn.innerHTML = '<i class="fas fa-chevron-up" id="alerts-chevron"></i> Collapse';
+                localStorage.setItem('alerts-collapsed', 'false');
+            } else {
+                alertsSection.classList.add('alerts-collapsed');
+                chevron.className = 'fas fa-chevron-down';
+                toggleBtn.innerHTML = '<i class="fas fa-chevron-down" id="alerts-chevron"></i> Expand';
+                localStorage.setItem('alerts-collapsed', 'true');
+            }
+        }
+
+        /**
+         * Load alerts collapse state from localStorage
+         */
+        function loadAlertsCollapseState() {
+            const isCollapsed = localStorage.getItem('alerts-collapsed') === 'true';
+            if (isCollapsed) {
+                const alertsSection = document.getElementById('alerts-section');
+                const chevron = document.getElementById('alerts-chevron');
+                const toggleBtn = document.getElementById('alerts-toggle-btn');
+
+                alertsSection.classList.add('alerts-collapsed');
+                chevron.className = 'fas fa-chevron-down';
+                toggleBtn.innerHTML = '<i class="fas fa-chevron-down" id="alerts-chevron"></i> Expand';
+            }
         }
 
         function showError(message) {

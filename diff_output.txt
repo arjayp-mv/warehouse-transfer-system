@@ -1,0 +1,48 @@
+warning: in the working copy of 'backend/forecasting.py', LF will be replaced by CRLF the next time Git touches it
+diff --git a/backend/forecasting.py b/backend/forecasting.py
+index 8fe1323..77d9099 100644
+--- a/backend/forecasting.py
++++ b/backend/forecasting.py
+@@ -662,6 +662,11 @@ class ForecastEngine:
+              %s, %s, %s, %s, %s, %s)
+         """
+ 
++        # Debug logging for V7.3 Phase 3A - verify growth_rate_source persistence
++        print(f"[DEBUG V7.3] Saving forecast for {forecast_data['sku_id']}: "
++              f"method={forecast_data['method_used']}, "
++              f"growth_rate_source={forecast_data.get('growth_rate_source', 'NOT SET')}")
++
+         params = (
+             self.forecast_run_id,
+             forecast_data['sku_id'],
+@@ -885,7 +890,12 @@ class ForecastEngine:
+             if similar_demands:
+                 base_from_similar = statistics.mean(similar_demands)
+ 
+-                # Get average seasonal factor from similar SKUs (EXPERT RECOMMENDATION)
++                # V7.3 Phase 3A: Similar SKU Seasonal Factor Averaging
++                # For new SKUs with limited data (< 12 months), we apply seasonal patterns
++                # from similar SKUs (same category, ABC code) that have established patterns.
++                # This helps new products follow expected seasonal trends before they have
++                # their own historical data. The seasonal boost is applied in STEP 4 below.
++                # Note: Growth rates from similar SKUs are NOT used (user decision - needs validation)
+                 seasonal_boost = self._get_average_seasonal_factor(similar_skus, warehouse)
+             else:
+                 base_from_similar = 0.0
+@@ -1019,6 +1029,16 @@ class ForecastEngine:
+         """
+         Find similar SKUs based on category, ABC/XYZ classification, and demand patterns.
+ 
++        V7.3 Phase 3A: This function is used to find comparable SKUs for new products
++        with limited historical data. Similar SKUs must match on:
++        - Same category (e.g., "Motorcycle Battery")
++        - Same ABC code (value classification: A/B/C)
++        - Active status only
++
++        The returned SKUs are used to:
++        1. Apply seasonal patterns to new SKUs (via _get_average_seasonal_factor)
++        2. Calculate baseline demand from similar product performance
++
+         Args:
+             sku_id: Current SKU identifier
+             sku_info: SKU information dictionary

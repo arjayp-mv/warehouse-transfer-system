@@ -983,8 +983,8 @@ SK-GHI789 SK-JKL012"></textarea>
                 // Add all suppliers from database
                 suppliers.forEach(supplier => {
                     const option = document.createElement('option');
-                    option.value = supplier;
-                    option.textContent = supplier;
+                    option.value = supplier.display_name || supplier.normalized_name || 'Unknown';
+                    option.textContent = supplier.display_name || supplier.normalized_name || 'Unknown';
                     supplierFilter.appendChild(option);
                 });
 
@@ -1003,8 +1003,8 @@ SK-GHI789 SK-JKL012"></textarea>
                 // Add unique suppliers from recommendations as fallback
                 suppliers.forEach(supplier => {
                     const option = document.createElement('option');
-                    option.value = supplier;
-                    option.textContent = supplier;
+                    option.value = supplier.display_name || supplier.normalized_name || supplier || 'Unknown';
+                    option.textContent = supplier.display_name || supplier.normalized_name || supplier || 'Unknown';
                     supplierFilter.appendChild(option);
                 });
             }

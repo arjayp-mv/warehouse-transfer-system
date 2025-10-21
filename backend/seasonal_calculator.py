@@ -18,7 +18,7 @@ import statistics
 from backend.database import execute_query
 
 
-def calculate_seasonal_pattern(sku_id: str, warehouse: str = 'combined') -> Dict:
+def calculate_seasonal_pattern(sku_id: str, warehouse: str = 'combined', filter_outliers: bool = True) -> Dict:
     """
     Calculate seasonal pattern for a SKU based on historical sales data.
 
@@ -29,6 +29,7 @@ def calculate_seasonal_pattern(sku_id: str, warehouse: str = 'combined') -> Dict
     Args:
         sku_id: SKU identifier
         warehouse: Warehouse location ('burnaby', 'kentucky', 'combined')
+        filter_outliers: If True, removes statistical outliers (spikes/anomalies) before calculating factors
 
     Returns:
         Dictionary containing:
@@ -37,39 +38,83 @@ def calculate_seasonal_pattern(sku_id: str, warehouse: str = 'combined') -> Dict
         - peak_months: List of peak month numbers
         - confidence: Confidence score (0-1) based on data quality
         - cv: Coefficient of variation of monthly sales
+        - outliers_removed: Number of outlier data points removed (if filter_outliers=True)
 
     Raises:
         ValueError: If insufficient historical data (< 12 months)
     """
-    # Get historical monthly sales for the past 24 months
+    # Get historical monthly sales for the past 36 months (increased from 24 for better stability)
     # Note: year_month is in YYYY-MM format, extract month number from it
 
     # Calculate cutoff date in Python to avoid SQL escaping issues
     from datetime import datetime
     from dateutil.relativedelta import relativedelta
-    cutoff_date = (datetime.now() - relativedelta(months=24)).strftime('%Y-%m')
+    cutoff_date = (datetime.now() - relativedelta(months=36)).strftime('%Y-%m')
 
-    query = """
+    # Get individual monthly sales (not averaged) for outlier detection
+    # Use corrected_demand columns to ensure stockout corrections are included
+    # Use warehouse-specific data when warehouse parameter is 'burnaby' or 'kentucky'
+    if warehouse == 'combined':
+        sales_column = 'corrected_demand_burnaby + corrected_demand_kentucky'
+        where_clause = '(corrected_demand_burnaby > 0 OR corrected_demand_kentucky > 0)'
+    else:
+        sales_column = f'corrected_demand_{warehouse}'
+        where_clause = f'corrected_demand_{warehouse} > 0'
+
+    query = f"""
         SELECT
+            `year_month`,
             CAST(SUBSTRING(`year_month`, 6, 2) AS UNSIGNED) as month,
-            AVG(burnaby_sales + kentucky_sales) as avg_sales,
-            COUNT(*) as data_points
+            {sales_column} as total_sales
         FROM monthly_sales
         WHERE sku_id = %s
           AND `year_month` >= %s
-          AND (burnaby_sales > 0 OR kentucky_sales > 0)
-        GROUP BY CAST(SUBSTRING(`year_month`, 6, 2) AS UNSIGNED)
-        ORDER BY month
+          AND {where_clause}
+        ORDER BY `year_month`
     """
 
-    monthly_data = execute_query(query, (sku_id, cutoff_date), fetch_all=True)
+    raw_data = execute_query(query, (sku_id, cutoff_date), fetch_all=True)
 
-    if len(monthly_data) < 12:
-        raise ValueError(f"Insufficient data for SKU {sku_id}: only {len(monthly_data)} months available")
+    if len(raw_data) < 12:
+        raise ValueError(f"Insufficient data for SKU {sku_id}: only {len(raw_data)} months available")
 
-    # Calculate monthly averages and coefficient of variation
-    monthly_sales = {row['month']: row['avg_sales'] for row in monthly_data}
+    # Filter outliers using Z-score method (if enabled)
+    outliers_removed = 0
+    if filter_outliers and len(raw_data) >= 12:
+        sales_values = [float(row['total_sales']) for row in raw_data]
+        mean_sales = statistics.mean(sales_values)
+        std_sales = statistics.stdev(sales_values) if len(sales_values) > 1 else 0
+
+        if std_sales > 0:
+            # Remove data points with Z-score > 2.5 (more than 2.5 standard deviations from mean)
+            filtered_data = []
+            for row in raw_data:
+                sales = float(row['total_sales'])
+                z_score = abs((sales - mean_sales) / std_sales)
+                if z_score <= 2.5:
+                    filtered_data.append(row)
+                else:
+                    outliers_removed += 1
+
+            # Only use filtered data if we still have enough months
+            if len(filtered_data) >= 12:
+                raw_data = filtered_data
+
+    # Group by month and calculate averages
+    from collections import defaultdict
+    monthly_groups = defaultdict(list)
+    for row in raw_data:
+        monthly_groups[row['month']].append(float(row['total_sales']))
+
+    # Calculate monthly averages
+    monthly_sales = {}
+    for month, sales_list in monthly_groups.items():
+        monthly_sales[month] = statistics.mean(sales_list)
+
     sales_values = list(monthly_sales.values())
+
+    if len(monthly_sales) < 12:
+        raise ValueError(f"Insufficient monthly coverage for SKU {sku_id}: only {len(monthly_sales)} months available")
 
     avg_sales = statistics.mean(sales_values)
     std_sales = statistics.stdev(sales_values) if len(sales_values) > 1 else 0
@@ -91,16 +136,18 @@ def calculate_seasonal_pattern(sku_id: str, warehouse: str = 'combined') -> Dict
     pattern = _classify_seasonal_pattern(peak_months, cv)
 
     # Calculate confidence based on data consistency
-    data_points_per_month = [row['data_points'] for row in monthly_data]
-    avg_data_points = statistics.mean(data_points_per_month)
-    confidence = min(1.0, avg_data_points / 12.0)  # Higher confidence with more data
+    # Count data points per month group
+    data_points_per_month = [len(sales_list) for sales_list in monthly_groups.values()]
+    avg_data_points = statistics.mean(data_points_per_month) if data_points_per_month else 0
+    confidence = min(1.0, avg_data_points / 3.0)  # Higher confidence with more data points (3 years = max)
 
     return {
         'pattern': pattern,
         'factors': factors,
         'peak_months': peak_months,
         'confidence': round(confidence, 2),
-        'cv': round(cv, 3)
+        'cv': round(cv, 3),
+        'outliers_removed': outliers_removed
     }
 
 

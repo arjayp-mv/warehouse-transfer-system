@@ -136,7 +136,7 @@ async def generate_forecast(request: ForecastGenerateRequest):
             logger.info(f"API: Forecast generation started successfully with run_id={result['run_id']}")
             return {
                 "run_id": result['run_id'],
-                "status": "pending",
+                "status": "started",
                 "message": "Forecast generation started successfully"
             }
 

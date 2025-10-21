@@ -1,681 +1,721 @@
-> great job on making the burnaby work\
-  read @docs\summary4.md for what you did\
-  this is not all of it though as i wasnt able to save the earlier conversation and what you did/edit\
-  now the problem is i think you just did burnaby for stockout fix\
-  you forgot to do the kentucky one too
-  ⎿  Read docs\summary4.md (1042 lines)
+  What Was Accomplished in This Session
+
+  V7.3 Phase 1 & 2: Pattern Detection & Auto-Sync (COMPLETED)
+
+  Problem: New SKU forecasts were severely under-forecasted (UB-YTX7A-BS showing 42 units instead of expected ~60-90 units).
+
+  Root Cause:
+  - June-July 2025 had 0 stockout_days in monthly_sales table despite actual stockouts
+  - Pattern detection incorrectly treated stockout months as "low sales periods"
+  - June 2025: Only 1 unit sold but availability_rate = 1.0 (100%)
+
+  Solution Implemented:
+
+  1. Automatic Stockout Data Sync (backend/forecast_jobs.py:102-109)
+    - Added auto-sync call before forecasting begins
+    - Syncs monthly_sales.stockout_days from stockout_dates table
+    - Processed 3,268 records for 504 SKUs in ~20 seconds
+  2. Test & Learn Pattern Detection (backend/forecasting.py:732-847)
+    - Launch spike detection: max_month > avg_others * 1.3
+    - Early stockout detection: Check first max(3, len//2) months
+    - Weighted baseline: (recent_3 * 0.7) + (older_3 * 0.3)
+    - Stockout boost: 1.2x multiplier when early stockout proves demand
+    - Safety multiplier: 1.1x for pattern-based (vs 1.3-1.5x standard)
+  3. Bug Fixes:
+    - Availability rate CASE now checks stockout_days before sales
+    - Launch spike uses max_month instead of first_month
+    - Edge case handling for uniform clean_months values (prevents StatisticsError)
+    - Comprehensive debug logging throughout pattern detection
+
+  Results:
+  - UB-YTX7A-BS: 42.59 → 79.20 units/month (84% improvement)
+  - Method: "limited_data_test_launch" (correctly identified)
+  - Baseline: 72.00 (avg of clean months [24, 133, 100, 31])
+  - June properly excluded (30 stockout_days, availability < 30%)
+  - UB-YTX14-BS: Unchanged (2,708 base) - regression test passed
+
+  Files Modified:
+  - backend/forecast_jobs.py (lines 102-109)
+  - backend/forecasting.py (lines 732-848)
+  - docs/TASKS.md (V7.3 completion documentation)
+
+  Committed to GitHub: Commit cbd86a3 - "feat: V7.3 New SKU Pattern Detection & Stockout Auto-Sync"
+
+  ---
+  What Still Needs to Be Done
+
+  V7.3 Phase 3A: Similar SKU Matching & Enhanced Forecasting (NEXT TO IMPLEMENT)
+
+  Scope: Enhance forecasting for new SKUs (3-6 months data) that don't trigger Test & Learn pattern detection.
+
+  User Decisions Made:
+  - ❌ Skip growth rate fallback from similar SKUs (needs validation)
+  - ❌ Skip pending inventory checks (belongs in future ordering page, not forecasting)
+  - ✅ Implement similar SKU seasonal factor averaging
+  - ✅ Fix growth_rate_source metadata persistence bug
+
+  Detailed Implementation Plan
+
+  1. Similar SKU Matching Function
+
+  Location: backend/forecasting.py (add new helper function)
+
+  def _find_similar_skus(sku_id: str, category: str, abc_code: str, xyz_code: str, limit: int = 5) -> List[Dict]:
+      """
+      Find similar SKUs for new product forecasting.
+      
+      Matches by:
+      - Same category
+      - Same ABC code (value classification)
+      - Same XYZ code (variability classification)
+      - Must have >= 12 months of data (established patterns)
+      
+      Args:
+          sku_id: SKU to find matches for (excluded from results)
+          category: Product category
+          abc_code: ABC classification (A/B/C)
+          xyz_code: XYZ classification (X/Y/Z)
+          limit: Maximum matches to return
+      
+      Returns:
+          List of dicts with: sku_id, months_of_data, avg_demand, seasonal_factors
+      """
+      query = """
+          SELECT 
+              s.sku_id,
+              COUNT(DISTINCT ms.year_month) as months_of_data,
+              AVG((ms.corrected_demand_burnaby + ms.corrected_demand_kentucky)) as avg_demand,
+              s.seasonal_factors
+          FROM skus s
+          JOIN monthly_sales ms ON s.sku_id = ms.sku_id
+          WHERE s.sku_id != %s
+            AND s.category = %s
+            AND s.abc_code = %s
+            AND s.xyz_code = %s
+            AND s.status = 'Active'
+            AND s.seasonal_factors IS NOT NULL
+          GROUP BY s.sku_id, s.seasonal_factors
+          HAVING COUNT(DISTINCT ms.year_month) >= 12
+          ORDER BY COUNT(DISTINCT ms.year_month) DESC, avg_demand DESC
+          LIMIT %s
+      """
+      results = execute_query(query, params=(sku_id, category, abc_code, xyz_code, limit), fetch_all=True)
 
-● Looking at the summary, you're absolutely right! I focused on fixing the Burnaby stockout correction but didn't apply the same fixes to
-  Kentucky. Let me read the summary to understand what was done, then complete the Kentucky implementation.
+      similar_skus = []
+      for row in results:
+          # Parse seasonal_factors JSON string to dict
+          factors = json.loads(row['seasonal_factors']) if row['seasonal_factors'] else None
+          similar_skus.append({
+              'sku_id': row['sku_id'],
+              'months_of_data': row['months_of_data'],
+              'avg_demand': float(row['avg_demand']),
+              'seasonal_factors': factors
+          })
+
+      return similar_skus
+
+  2. Integrate Similar SKU Logic
+
+  Location: backend/forecasting.py _handle_limited_data_sku() function (around line 900-950)
 
-● Read(docs\summary4.md)
-  ⎿  Read 1042 lines (ctrl+o to expand)
+  Add after pattern detection but before fallback to category average:
+
+  # STEP 4: If no pattern detected, try similar SKU matching
+  if baseline_from_pattern is None:
+      print(f"[DEBUG V7.3] {sku_id}: No pattern detected, attempting similar SKU matching")
 
-● I can see from the summary that the stockout correction for Burnaby was implemented, but you're right - Kentucky wasn't fully addressed.        
-  Looking at the code, the recalculate_all_corrected_demands() function actually handles BOTH warehouses (lines 114-123 and 386-389 show it       
-  calculating corrected demand for both Burnaby and Kentucky). However, the issue is that the WeightedDemandCalculator still shows incorrect      
-  values.
+      # Find similar SKUs
+      similar_skus = _find_similar_skus(
+          sku_id=sku_id,
+          category=sku_data.get('category'),
+          abc_code=sku_data.get('abc_code'),
+          xyz_code=sku_data.get('xyz_code'),
+          limit=5
+      )
 
-  Let me investigate why Kentucky might not be working correctly and create a plan to fix both warehouses comprehensively.
+      if similar_skus and len(similar_skus) >= 2:
+          print(f"[DEBUG V7.3] {sku_id}: Found {len(similar_skus)} similar SKUs")
 
-● Let me check the current state of the weighted_demand.py file to see what's still using raw sales vs corrected demand:
+          # Average seasonal factors from similar SKUs
+          month_factors = {month: [] for month in range(1, 13)}
+          for sim in similar_skus:
+              if sim['seasonal_factors']:
+                  for month_str, factor in sim['seasonal_factors'].items():
+                      month_num = int(month_str)
+                      month_factors[month_num].append(factor)
 
-● Read(backend\weighted_demand.py)
-  ⎿  Read 50 lines (ctrl+o to expand)
+          # Calculate averaged factors
+          averaged_factors = {}
+          for month, factors_list in month_factors.items():
+              if factors_list:
+                  averaged_factors[month] = statistics.mean(factors_list)
 
-● Good, this part looks fixed. Let me check if there's still a correct_monthly_demand method being called somewhere else:
+          # Store for later use
+          seasonal_factors_from_similar = averaged_factors
+          similar_skus_used = [s['sku_id'] for s in similar_skus]
 
-● Search(pattern: "correct_monthly_demand", path: "backend\weighted_demand.py", output_mode: "content")
-  ⎿  Found 3 lines (ctrl+o to expand)
+          # Update metadata
+          metadata['similar_skus_used'] = similar_skus_used
+          metadata['similar_sku_count'] = len(similar_skus)
+          metadata['method_used'] = 'limited_data_similar_skus'
+          metadata['confidence'] = 0.45  # Lower than pattern-based (0.55)
+
+          print(f"[DEBUG V7.3] {sku_id}: Using seasonal factors from similar SKUs: {similar_skus_used}")
+      else:
+          print(f"[DEBUG V7.3] {sku_id}: No suitable similar SKUs found (need >= 2)")
+          seasonal_factors_from_similar = None
+
+  3. Fix growth_rate_source Metadata Bug
 
-● There are still calls to correct_monthly_demand on lines 534 and 582! Let me check what these are:
+  Location: backend/forecasting.py save_forecast() function (around line 662-677)
 
-● Read(backend\weighted_demand.py)
-  ⎿  Read 60 lines (ctrl+o to expand)
+  Current Issue: growth_rate_source shows empty string in database despite being set.
 
-● I found it! There are still two places where the code is using correct_monthly_demand on raw sales data instead of using the pre-calculated     
-  corrected values from the database. Let me check the full calculate_enhanced_demand method to understand the flow better:
+  Root Cause: Column order mismatch in INSERT statement or missing column in forecast_details table.
 
-● Read(backend\weighted_demand.py)
-  ⎿  Read 50 lines (ctrl+o to expand)
+  Fix:
+  1. Verify forecast_details table schema has growth_rate_source column
+  2. Check INSERT statement column order matches VALUES order exactly
+  3. Add debug print before INSERT to verify value is set:
 
-● Let me also check where the get_enhanced_demand_calculation method gets called and what values are passed in:
+  print(f"[DEBUG V7.3] Saving forecast with growth_rate_source: {forecast_data.get('growth_rate_source', 'NOT SET')}")
 
-● Search(pattern: "get_enhanced_demand_calculation", path: "backend")
-  ⎿  Found 4 files (ctrl+o to expand)
+  Location of INSERT: backend/forecasting.py around line 662-677
 
-● Search(pattern: "get_enhanced_demand_calculation", path: "backend\calculations.py", output_mode: "content")
-  ⎿  Found 17 lines (ctrl+o to expand)
+  Look for this pattern:
+  INSERT INTO forecast_details (
+      forecast_run_id, sku_id, warehouse,
+      base_demand_used, method_used,
+      growth_rate_applied, growth_rate_source,  # Verify this column exists and is in right position
+      ...
+  ) VALUES (%s, %s, %s, %s, %s, %s, %s, ...)
 
-● Now I see the issue! The get_enhanced_demand_calculation method is being called with raw sales data (kentucky_sales, burnaby_sales) and
-  stockout days, but it's still using these to calculate fallback demand instead of getting the corrected values from the database.
+  4. Add similar_skus_used Column (Optional)
 
-  Let me check to see if we need to get the corrected demand values instead:
+  If you want to track which similar SKUs were used for audit:
 
-● Read(backend\calculations.py)
-  ⎿  Read 30 lines (ctrl+o to expand)
+  ALTER TABLE forecast_details
+  ADD COLUMN similar_skus_used TEXT AFTER growth_rate_source;
 
-● Now let me check where these sales values come from:
+  Then update INSERT statement to include it.
 
-● Read(backend\calculations.py)
-  ⎿  Read 50 lines (ctrl+o to expand)
-  ⎿  Interrupted · What should Claude do instead?
+  Test Cases for Phase 3A
 
-> remember that the burnaby one is working\
-  so it should be kentucky specific that needs to be fixed no?
+  1. UB-YTX7A-BS: Should still use pattern detection (has 9 months + launch spike)
+    - Method: "limited_data_test_launch"
+    - Should NOT use similar SKU matching
+  2. New SKU with 4 months, no pattern: Should use similar SKU seasonal factors
+    - Find a SKU with 3-6 months data
+    - Verify method: "limited_data_similar_skus"
+    - Check similar_skus_used field populated
+  3. growth_rate_source persistence:
+    - Query: SELECT growth_rate_source FROM forecast_details WHERE sku_id = 'UB-YTX7A-BS' AND forecast_run_id = 34
+    - Should show: "proven_demand_stockout" (not empty string)
+
+  Performance Target
 
-● You're absolutely right! Let me update my understanding and focus specifically on Kentucky.
+  - Similar SKU matching: < 200ms per SKU
+  - No impact on overall forecast generation time (< 20 seconds for 1,768 SKUs)
 
-● Let me check specifically what's happening with Kentucky. Since Burnaby is working (showing 144 which is close to expected 142.76), let's       
-  see what Kentucky is showing:
+  ---
+  V7.3 Phase 4: Queue Management System (AFTER Phase 3A)
 
-● Bash(curl -s "http://localhost:8000/api/test-weighted-demand/UB-YTX14AH-BS" | python -m json.tool | grep -A2 -B2 "kentucky")
-  ⎿          "abc_code": "C",
-             "xyz_code": "Y",
-             "kentucky_qty": 356,
-     … +20 lines (ctrl+o to expand)
+  Scope: Handle concurrent forecast requests gracefully, preventing "job already running" errors.
 
-● Perfect! Now I can see the issue clearly:
-  - Burnaby demand: 144.08 ✅ (working correctly, close to expected ~142.76)
-  - Kentucky demand: 33.1 ❌ (should be higher if it has stockout corrections)
-
-  Let me check what the Kentucky sales and stockout data looks like in the database:
-  ⎿  Interrupted · What should Claude do instead?
-
-> i want you to test LP-12V-NICD-13
-  as it has more regular stockouts but hihg sales when it's in stock and the ky demand is low
-
-● Excellent choice! LP-12V-NICD-13 will be a better test case since it has regular stockouts with high sales when in stock. Let me investigate    
-   this SKU specifically for Kentucky.
-
-● Bash(curl -s "http://localhost:8000/api/test-weighted-demand/LP-12V-NICD-13" | python -m json.tool)
-  ⎿  {
-         "sku_id": "LP-12V-NICD-13",
-         "sku_info": {
-     … +75 lines (ctrl+o to expand)
-
-● Perfect example! Let me check the raw Kentucky sales data with stockouts for this SKU:
-
-● Bash(cd /c/Users/Arjay/Downloads/warehouse-transfer && python -c "
-      from backend.database import get_database_connection…)
-  ⎿  LP-12V-NICD-13 Kentucky Sales History:
-     ============================================================
-     2025-08: Sales= 13, Stockout=27 days, Corrected=  19.50
-     … +8 lines (ctrl+o to expand)
-
-● This is very revealing! The corrected demand values for Kentucky look wrong:
-
-  - August 2025: Sales=13, Stockout=27 days → Corrected=19.50 (should be much higher! 27 days out of 31 means only 4 days of sales)
-  - June 2025: Sales=0, Stockout=29 days → Corrected=0.00 (should not be 0 if there were stockouts!)
-
-  Let me calculate what the corrected values should be:
-
-● Bash(cd /c/Users/Arjay/Downloads/warehouse-transfer && python -c "
-      # Test the correction calculation…)
-  ⎿  LP-12V-NICD-13 Kentucky - Expected Corrections:
-     ============================================================
-     August: 13 sales, 27/31 stockout days
-     … +12 lines (ctrl+o to expand)
-
-● I see a major issue! The Kentucky corrected demand calculation is using the 30% floor which is limiting the correction. With only 4 days of     
-  availability in August (27 stockout days out of 31), the correction should be much higher:
-  - Actual availability: 4/31 = 0.129 (12.9%)
-  - With 30% floor: 13 / 0.3 = 43.33
-  - Without floor: 13 / 0.129 = 100.78
-
-  This is a huge difference! Let me check if the issue is in the calculation itself:
-
-● Let me compare how Burnaby looks for the same SKU:
-
-● Bash(cd /c/Users/Arjay/Downloads/warehouse-transfer && python -c "
-      from backend.database import get_database_connection…)
-  ⎿  Error: /usr/bin/bash: line 51: year_month\: No such file or directory
-     /usr/bin/bash: line 51: year_month\: No such file or directory
-     <string>:10: SyntaxWarning: invalid escape sequence '\,'
-     Traceback (most recent call last):
-       File "<string>", line 20, in <module>
-         cursor.execute(query, ('LP-12V-NICD-13',))
-         ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-       File "C:\Users\Arjay\Downloads\warehouse-transfer\venv\Lib\site-packages\pymysql\cursors.py", line 153, in execute
-         result = self._query(query)
-       File "C:\Users\Arjay\Downloads\warehouse-transfer\venv\Lib\site-packages\pymysql\cursors.py", line 322, in _query
-     … +19 lines (ctrl+o to see all)
-
-● Let me fix the SQL syntax:
-
-● Bash(cd /c/Users/Arjay/Downloads/warehouse-transfer && python -c "
-      from backend.database import get_database_connection…)
-  ⎿  Error: Traceback (most recent call last):
-       File "<string>", line 20, in <module>
-         cursor.execute(query, ('LP-12V-NICD-13',))
-         ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-       File "C:\Users\Arjay\Downloads\warehouse-transfer\venv\Lib\site-packages\pymysql\cursors.py", line 153, in execute
-         result = self._query(query)
-       File "C:\Users\Arjay\Downloads\warehouse-transfer\venv\Lib\site-packages\pymysql\cursors.py", line 322, in _query
-         conn.query(q)
-         ~~~~~~~~~~^^^
-       File "C:\Users\Arjay\Downloads\warehouse-transfer\venv\Lib\site-packages\pymysql\connections.py", line 575, in query
-     … +16 lines (ctrl+o to see all)
-
-● Let me use backticks properly:
-
-● Bash(cd /c/Users/Arjay/Downloads/warehouse-transfer && python -c "
-      from backend.database import get_database_connection…)
-  ⎿  Error: /usr/bin/bash: line 41: year_month: command not found
-     /usr/bin/bash: line 41: year_month: command not found
-     Traceback (most recent call last):
-       File "<string>", line 11, in <module>
-         cursor.execute(sql, ('LP-12V-NICD-13',))
-         ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^
-       File "C:\Users\Arjay\Downloads\warehouse-transfer\venv\Lib\site-packages\pymysql\cursors.py", line 153, in execute
-         result = self._query(query)
-       File "C:\Users\Arjay\Downloads\warehouse-transfer\venv\Lib\site-packages\pymysql\cursors.py", line 322, in _query
-         conn.query(q)
-     … +18 lines (ctrl+o to see all)
-
-● Let me write the query differently:
-
-● Bash(cd /c/Users/Arjay/Downloads/warehouse-transfer && python -c "
-      from backend.database import get_database_connection…)
-  ⎿  Error: Traceback (most recent call last):
-       File "<string>", line 9, in <module>
-         cursor.execute("""
-         ~~~~~~~~~~~~~~^^^^
-         SELECT year_month,
-         ^^^^^^^^^^^^^^^^^^
-         ...<6 lines>...
-         LIMIT 3
-         ^^^^^^^
-         """)
-     … +23 lines (ctrl+o to see all)
-
-● I need to escape year_month. Let me write this more carefully:
-  ⎿  User rejected Claude's plan:
-     ╭───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮     │ Kentucky Stockout Correction Fix Plan                                                                                                     │     │                                                                                                                                           │     │ Problem Identified                                                                                                                        │     │                                                                                                                                           │     │ The stockout correction for Kentucky warehouse is not working properly, while Burnaby is working correctly. After investigating           │     │ LP-12V-NICD-13:                                                                                                                           │     │                                                                                                                                           │     │ Current Status:                                                                                                                           │     │ - Burnaby: Shows 77.86 demand ✅ (working)                                                                                                │     │ - Kentucky: Shows 30.15 demand ❌ (too low for high stockout periods)                                                                     │     │                                                                                                                                           │     │ Root Causes Found:                                                                                                                        │     │                                                                                                                                           │     │ 1. 30% Floor Too Restrictive for Kentucky                                                                                                 │     │   - LP-12V-NICD-13 August: 13 sales with 27/31 days stockout (87% out of stock)                                                           │     │   - Current algorithm: 13 / 0.3 = 43.33 (capped at 30% floor)                                                                             │     │   - Should be: 13 / 0.129 = ~100 (actual availability)                                                                                    │     │   - The 30% floor is preventing proper correction for severe stockouts                                                                    │     │ 2. Remaining Direct Correction Calls                                                                                                      │     │   - Lines 534 & 582 in weighted_demand.py still call correct_monthly_demand directly                                                      │     │   - These are fallback calculations that bypass the pre-calculated corrected values                                                       │     │ 3. Data Quality Issues                                                                                                                    │     │   - May 2025: Shows 15 sales with 31/31 stockout days (impossible - data error?)                                                          │     │   - June 2025: 0 sales with 29 stockout days (correctly shows 0 corrected)                                                                │     │                                                                                                                                           │     │ Proposed Solution                                                                                                                         │     │                                                                                                                                           │     │ 1. Adjust Stockout Correction Algorithm                                                                                                   │     │   - Lower the floor from 30% to 10% for more aggressive correction                                                                        │     │   - OR use a graduated floor based on stockout severity:                                                                                  │     │       - < 50% stockout: Use actual availability                                                                                           │     │     - 50-80% stockout: 20% floor                                                                                                          │     │     80% stockout: 10% floor                                                                                                               │     │ 2. Fix Remaining Correction Calls in weighted_demand.py                                                                                   │     │   - Line 534: Replace fallback with database corrected value lookup                                                                       │     │   - Line 582: Replace error fallback with database corrected value lookup                                                                 │     │ 3. Re-run Corrected Demand Recalculation                                                                                                  │     │   - After algorithm adjustment, recalculate all corrected demands                                                                         │     │   - This will update both corrected_demand_burnaby and corrected_demand_kentucky                                                          │     │ 4. Verify Both Warehouses                                                                                                                 │     │   - Test LP-12V-NICD-13 (Kentucky should show ~80-100 instead of 30.15)                                                                   │     │   - Test UB-YTX14AH-BS (ensure Burnaby stays at ~144)                                                                                     │     │                                                                                                                                           │     │ Implementation Steps                                                                                                                      │     │                                                                                                                                           │     │ 1. Update correct_monthly_demand function in database.py to use graduated floor                                                           │     │ 2. Update fallback calculations in weighted_demand.py to use database values                                                              │     │ 3. Run recalculate_all_corrected_demands() to update all values                                                                           │     │ 4. Clear cache and test both SKUs                                                                                                         │     │ 5. Verify transfer recommendations reflect proper demand                                                                                  │     │                                                                                                                                           │     │ This will ensure Kentucky gets proper stockout corrections similar to Burnaby, addressing the user's concern about underestimated demand  │     │ when items are frequently out of stock.                                                                                                   │     ╰───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
-> Data Quality Issues                                                                                                                     │ ││ │  
-     - May 2025: Shows 15 sales with 31/31 stockout days (impossible - data error?) \
-  this is probably due to fba which we are not currently considering as it will just make it more complicated\
-  i dont understand the floor thing\
-  why do we have it?
-
-● Good question! Let me explain the floor concept and why it might be causing problems.
-
-  What is the 30% Floor?
-
-  The floor is a safety mechanism in the stockout correction algorithm. Here's how it works:
-
-  def correct_monthly_demand(monthly_sales, stockout_days, days_in_month=30):
-      availability_rate = (days_in_month - stockout_days) / days_in_month
-
-      if availability_rate < 1.0:
-          # This is the floor - it prevents the correction factor from going below 0.3
-          correction_factor = max(availability_rate, 0.3)  # <-- THE FLOOR
-          corrected_demand = monthly_sales / correction_factor
-
-  Why Do We Have It?
-
-  The floor was added to prevent overcorrection in extreme cases. The concern was:
-  - Without a floor, if an item was out of stock for 29 out of 30 days (3.3% availability)
-  - And it sold 10 units in that 1 day
-  - The correction would be: 10 / 0.033 = 303 units
-  - This seemed too aggressive, so the 30% floor caps it at: 10 / 0.3 = 33 units
-
-  The Problem
-
-  For Kentucky warehouse with LP-12V-NICD-13:
-  - August 2025: 13 sales in only 4 days available (27/31 days out of stock)
-  - Actual availability: 4/31 = 12.9%
-  - With 30% floor: 13 / 0.3 = 43.33 corrected demand
-  - Without floor: 13 / 0.129 = 100.78 corrected demand
-
-  The floor is preventing us from recognizing that selling 13 units in just 4 days means the true demand is much higher!
-
-  Why This Matters
-
-  Kentucky often has more severe stockouts than Burnaby. If Kentucky is out of stock 87% of the time but still selling when available, the        
-  true demand is being severely underestimated. This leads to:
-  - Insufficient transfer quantities
-  - Continued stockouts
-  - Lost sales
-
-  Possible Solutions
-
-  1. Remove the floor entirely - Trust the math
-  2. Lower the floor - Maybe 10% instead of 30%
-  3. Dynamic floor - Use different floors based on severity:
-    - Mild stockouts (< 50%): No floor
-    - Severe stockouts (> 80%): Lower floor (10-15%)
-
-  The FBA point you mentioned (Fulfillment by Amazon) makes sense - if some sales are happening through FBA even during "stockout" periods,       
-  that would explain the data anomaly.
-
-  What do you think? Should we remove the floor or adjust it?
-
-> what do you suggest?
-
-● Based on my analysis, I suggest a graduated floor approach that's more intelligent about when to apply limits:
-
-  My Recommendation: Smart Graduated Floor
-
-  def correct_monthly_demand(monthly_sales, stockout_days, days_in_month=30):
-      if stockout_days == 0 or monthly_sales == 0:
-          return float(monthly_sales)
-
-      availability_rate = (days_in_month - stockout_days) / days_in_month
-
-      if availability_rate < 1.0:
-          # Graduated floor based on stockout severity
-          if availability_rate >= 0.5:
-              # Mild stockout (< 50% out): No floor, trust the math
-              correction_factor = availability_rate
-          elif availability_rate >= 0.2:
-              # Moderate stockout (50-80% out): 20% floor
-              correction_factor = max(availability_rate, 0.2)
+  Detailed Implementation Plan
+
+  1. Backend Queue System
+
+  Location: backend/forecast_jobs.py (modify existing worker)
+
+  Add at module level:
+  import queue
+  import threading
+
+  # Global forecast queue
+  _forecast_queue = queue.Queue()
+  _queue_lock = threading.Lock()
+
+  Modify start_forecast_generation() function:
+  def start_forecast_generation(...) -> dict:
+      """
+      Start a new forecast generation job.
+      
+      Returns:
+          dict with keys: run_id, status (either 'started' or 'queued')
+      """
+      if _forecast_worker.is_running:
+          # Another forecast is running, add to queue
+          with _queue_lock:
+              queue_position = _forecast_queue.qsize() + 1
+
+          # Create forecast run entry with 'queued' status
+          run_id = create_forecast_run(forecast_name, growth_rate, warehouse, status='queued')
+
+          # Add to queue
+          _forecast_queue.put({
+              'run_id': run_id,
+              'sku_ids': sku_ids,
+              'warehouse': warehouse,
+              'growth_rate': growth_rate
+          })
+
+          # Update queue position in database
+          update_forecast_run_status(run_id, status='queued', queue_position=queue_position)
+
+          logger.info(f"Forecast {run_id} queued at position {queue_position}")
+
+          return {'run_id': run_id, 'status': 'queued', 'queue_position': queue_position}
+
+      else:
+          # No forecast running, start immediately
+          run_id = create_forecast_run(forecast_name, growth_rate, warehouse)
+          _forecast_worker.start_forecast_job(run_id, sku_ids, warehouse, growth_rate)
+
+          return {'run_id': run_id, 'status': 'started'}
+
+  Add queue processing in worker's _run_forecast_job():
+  def _run_forecast_job(...):
+      try:
+          # ... existing forecast logic ...
+
+      finally:
+          self.is_running = False
+          self.current_job_id = None
+
+          # Process next job in queue
+          _process_next_queued_job()
+
+  def _process_next_queued_job():
+      """Check queue and start next job if available."""
+      if not _forecast_queue.empty():
+          next_job = _forecast_queue.get()
+
+          logger.info(f"Processing queued forecast {next_job['run_id']}")
+
+          _forecast_worker.start_forecast_job(
+              next_job['run_id'],
+              next_job['sku_ids'],
+              next_job['warehouse'],
+              next_job['growth_rate']
+          )
+
+  2. Database Support
+
+  Add migration: database/add_queue_support.sql
+  ALTER TABLE forecast_runs
+  ADD COLUMN queue_position INT NULL AFTER status,
+  ADD COLUMN queued_at TIMESTAMP NULL AFTER created_at;
+
+  -- Update status enum to include 'queued'
+  ALTER TABLE forecast_runs
+  MODIFY COLUMN status ENUM('pending', 'queued', 'running', 'completed', 'failed', 'cancelled')
+  DEFAULT 'pending';
+
+  3. API Endpoints
+
+  Location: backend/forecasting_api.py
+
+  Add new endpoints:
+  @router.get("/forecasts/queue", response_model=List[Dict])
+  async def get_forecast_queue():
+      """Get current forecast queue status."""
+      query = """
+          SELECT id, forecast_name, queue_position, queued_at, total_skus
+          FROM forecast_runs
+          WHERE status = 'queued'
+          ORDER BY queue_position ASC
+      """
+      results = execute_query(query, fetch_all=True)
+      return results
+
+  @router.delete("/forecasts/queue/{run_id}")
+  async def cancel_queued_forecast(run_id: int):
+      """Remove a forecast from the queue."""
+      # Check if queued
+      check_query = "SELECT status FROM forecast_runs WHERE id = %s"
+      result = execute_query(check_query, params=(run_id,), fetch_all=True)
+
+      if not result or result[0]['status'] != 'queued':
+          raise HTTPException(status_code=400, detail="Forecast not in queue")
+
+      # Update status to cancelled
+      update_forecast_run_status(run_id, status='cancelled')
+
+      # TODO: Remove from queue.Queue() - need to implement queue item removal
+
+      return {"message": "Forecast removed from queue", "run_id": run_id}
+
+  Modify existing generate endpoint:
+  @router.post("/forecasts/generate")
+  async def generate_forecast(request: ForecastGenerateRequest):
+      try:
+          result = start_forecast_generation(...)
+
+          if result['status'] == 'queued':
+              return {
+                  "message": "Forecast queued",
+                  "run_id": result['run_id'],
+                  "queue_position": result['queue_position']
+              }
           else:
-              # Severe stockout (> 80% out): 10% floor
-              # But also cap the maximum correction
-              correction_factor = max(availability_rate, 0.1)
-              corrected_demand = monthly_sales / correction_factor
-              # Cap at 3x for extreme cases (instead of 1.5x)
-              corrected_demand = min(corrected_demand, monthly_sales * 3)
-              return round(corrected_demand, 2)
+              return {
+                  "message": "Forecast generation started",
+                  "run_id": result['run_id']
+              }
+      except RuntimeError as e:
+          # This should not happen anymore with queue system
+          raise HTTPException(status_code=409, detail=str(e))
 
-          corrected_demand = monthly_sales / correction_factor
-          return round(corrected_demand, 2)
+  4. Frontend UI
 
-      return float(monthly_sales)
+  Location: frontend/forecasting.html
 
-  Why This Approach?
+  Add confirmation modal (around line 100):
+  <!-- Queue Confirmation Modal -->
+  <div class="modal fade" id="queueConfirmModal" tabindex="-1">
+      <div class="modal-dialog">
+          <div class="modal-content">
+              <div class="modal-header">
+                  <h5 class="modal-title">Forecast Already Running</h5>
+                  <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+              </div>
+              <div class="modal-body">
+                  <p>A forecast generation is currently in progress.</p>
+                  <p><strong>Queue Position:</strong> <span id="queuePositionText">1</span></p>
+                  <p><strong>Estimated Wait:</strong> <span id="estimatedWaitText">15-20 minutes</span></p>
+                  <p>Would you like to queue this forecast or cancel?</p>
+              </div>
+              <div class="modal-footer">
+                  <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                  <button type="button" class="btn btn-primary" id="confirmQueueBtn">Queue Forecast</button>
+              </div>
+          </div>
+      </div>
+  </div>
 
-  1. Mild stockouts (< 50% out): Trust the actual data - if you're out half the month, double the demand is reasonable
-  2. Moderate stockouts (50-80% out): Apply a gentle 20% floor - some protection against overcorrection
-  3. Severe stockouts (> 80% out):
-    - Use 10% floor (vs current 30%) - allows recognition of severe shortage
-    - But cap at 3x multiplication (vs current 1.5x) - prevents absurd corrections
+  Location: frontend/forecasting.js
 
-  Real Examples with This Approach:
+  Modify generateForecast() function (around line 50):
+  async function generateForecast() {
+      const forecastName = document.getElementById('forecastName').value;
+      // ... get other fields ...
 
-  LP-12V-NICD-13 Kentucky August (13 sales, 27/31 days out):
-  - Current: 13 / 0.3 = 43.33
-  - New: 13 / 0.129 = 100.78 → capped at 39 (3x)
-  - Much better recognition of severe shortage!
+      try {
+          const response = await fetch('/api/forecasts/generate', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(requestData)
+          });
 
-  Regular stockout (100 sales, 15/30 days out):
-  - Current: 100 / 0.5 = 200
-  - New: 100 / 0.5 = 200 (same - no floor needed)
+          const result = await response.json();
 
-  This approach:
-  - ✅ Better handles Kentucky's severe stockouts
-  - ✅ Still prevents absurd overcorrections
-  - ✅ Adapts to the severity of the situation
-  - ✅ More accurately reflects true demand
+          if (result.queue_position) {
+              // Show queue confirmation modal
+              document.getElementById('queuePositionText').textContent = result.queue_position;
+              document.getElementById('estimatedWaitText').textContent =
+                  `${result.queue_position * 15}-${result.queue_position * 20} minutes`;
 
-  What do you think? Should we implement this graduated approach?
+              const modal = new bootstrap.Modal(document.getElementById('queueConfirmModal'));
+              modal.show();
 
-> why not look at recent historical data?\
-  i think the approach you suggested is good but im just wondering
+              // Store run_id for potential cancellation
+              window.pendingQueuedRunId = result.run_id;
+          } else {
+              showAlert('success', 'Forecast generation started!');
+              loadForecastList();
+              startProgressPolling(result.run_id);
+          }
 
-● Excellent point! Looking at recent historical data would be much smarter than just applying a mathematical formula. Let me explain both
-  approaches:
+      } catch (error) {
+          showAlert('danger', 'Failed to start forecast generation');
+      }
+  }
 
-  Historical Data Approach (Your Suggestion)
+  Add queue status indicator in forecast list:
+  function renderForecastRow(run) {
+      let statusBadge = '';
+      if (run.status === 'queued') {
+          statusBadge = `<span class="badge bg-info">QUEUED (Position ${run.queue_position})</span>`;
+      } else if (run.status === 'running') {
+          statusBadge = '<span class="badge bg-primary">RUNNING</span>';
+      }
+      // ... rest of function
+  }
 
-  When we have severe stockouts, we could look back at months when the item WAS in stock:
+  Test Cases for Phase 4
 
-  def correct_with_historical_fallback(monthly_sales, stockout_days, sku_id, warehouse, month):
-      availability_rate = (days_in_month - stockout_days) / days_in_month
+  1. Concurrent Forecast Test:
+    - Generate forecast A (should start)
+    - Immediately generate forecast B (should queue with position 1)
+    - Verify modal shows queue confirmation
+    - Complete forecast A
+    - Verify forecast B auto-starts
+  2. Cancel Queued Forecast:
+    - Queue forecast B (while A is running)
+    - Click cancel on forecast B in list
+    - Verify status changes to 'cancelled'
+    - Verify forecast B doesn't start when A completes
+  3. Multiple Queued Forecasts:
+    - Generate 3 forecasts in quick succession
+    - Verify queue positions: 1, 2, 3
+    - Verify FIFO processing order
 
-      if availability_rate < 0.2:  # Severe stockout (>80% out)
-          # Look back at recent months with good availability
-          historical_avg = get_historical_average_when_in_stock(sku_id, warehouse, lookback_months=6)
-          if historical_avg > 0:
-              return historical_avg
+  Performance Target
 
-      # Otherwise use the graduated floor approach
-      return graduated_correction(monthly_sales, stockout_days)
+  - Queue operations: < 100ms
+  - No impact on forecast generation speed
 
-  Example with LP-12V-NICD-13 Kentucky:
+  ---
+  V7.4: Auto Growth Rate Calculation (FUTURE PLAN)
 
-  Current situation:
-  - August: 13 sales (27/31 days out)
-  - July: 68 sales (0 days out) ✅
-  - June: 0 sales (29/30 days out)
-  - May: 15 sales (31/31 days out - data issue)
-  - April: 125 sales (1 day out) ✅
+  Status: DEFERRED until Phase 3A similar SKU matching is validated and we have production data on trend predictability.
 
-  Historical approach would say:
-  "When this SKU is actually in stock (July, April), it sells 68-125 units/month. So August's true demand is probably ~70-100, not 13."
+  Detailed Implementation Plan
 
-  Hybrid Approach (Best of Both)
+  Scope: Automatically calculate SKU-specific growth rates using weighted linear regression instead of manual input.
 
-  def smart_correction(monthly_sales, stockout_days, sku_id, warehouse, month):
-      availability_rate = (days_in_month - stockout_days) / days_in_month
+  Algorithm: Weighted Linear Regression with Exponential Decay
 
-      # For severe stockouts, try historical first
-      if availability_rate < 0.2:
-          # Get average from recent months with >80% availability
-          good_months = get_months_with_good_availability(sku_id, warehouse, min_availability=0.8)
-          if len(good_months) >= 2:
-              return average(good_months)
+  def calculate_auto_growth_rate(sku_id: str, months_window: int = 12) -> Dict:
+      """
+      Calculate automatic growth rate using weighted linear regression.
+      
+      Uses exponential weighting: weight = 0.5^(n-i) where n is total months, i is month index.
+      Recent months have higher weight (approach 1.0), older months decay to 0.0.
+      
+      Args:
+          sku_id: SKU to analyze
+          months_window: Lookback period (6-12 months recommended)
+      
+      Returns:
+          dict with: growth_rate (monthly %), confidence (0-1), method_used, data_points
+      """
+      # Get monthly demand data
+      query = """
+          SELECT year_month, 
+                 (corrected_demand_burnaby + corrected_demand_kentucky) as demand
+          FROM monthly_sales
+          WHERE sku_id = %s
+            AND (corrected_demand_burnaby > 0 OR corrected_demand_kentucky > 0)
+          ORDER BY year_month DESC
+          LIMIT %s
+      """
+      results = execute_query(query, params=(sku_id, months_window), fetch_all=True)
 
-      # Fall back to graduated mathematical correction
-      return graduated_floor_correction(monthly_sales, stockout_days)
+      if len(results) < 6:
+          # Not enough data for SKU-specific trend
+          return {
+              'growth_rate': None,
+              'confidence': 0.0,
+              'method_used': 'insufficient_data',
+              'data_points': len(results)
+          }
 
-  Why This Is Better:
+      # Reverse to chronological order (oldest first)
+      results = list(reversed(results))
 
-  1. More accurate: Uses actual proven demand when available
-  2. Handles patterns: Captures seasonal variations naturally
-  3. Self-validating: If historical shows 70-100 units when in stock, we know 13 units in 4 days makes sense
-  4. FBA-aware: Historical data already includes any FBA sales
+      # Prepare data for regression
+      n = len(results)
+      x_values = list(range(n))  # 0, 1, 2, ..., n-1
+      y_values = [float(row['demand']) for row in results]
 
-  The Trade-off:
+      # Calculate exponential weights (recent months weighted higher)
+      weights = [0.5 ** (n - i - 1) for i in range(n)]
 
-  - Pro: More accurate, data-driven
-  - Con: Needs sufficient historical data (new SKUs won't have it)
-  - Con: Slightly more complex to implement
+      # Weighted linear regression
+      sum_w = sum(weights)
+      sum_wx = sum(w * x for w, x in zip(weights, x_values))
+      sum_wy = sum(w * y for w, y in zip(weights, y_values))
+      sum_wxx = sum(w * x * x for w, x in zip(weights, x_values))
+      sum_wxy = sum(w * x * y for w, x, y in zip(weights, x_values, y_values))
 
-  Should we implement this historical-based approach with graduated floor as fallback? This would give Kentucky much better demand estimates      
-  based on proven sales history.
+      # Calculate slope (monthly change)
+      denominator = (sum_w * sum_wxx) - (sum_wx ** 2)
+      if abs(denominator) < 1e-10:
+          # Flat trend
+          return {
+              'growth_rate': 0.0,
+              'confidence': 0.7,
+              'method_used': 'flat_trend',
+              'data_points': n
+          }
 
-> sounds good\
-  update @docs\TASKS.md with the detailed tasks that needs to be done to implement this and make sure to update when it's done\
-    do a comprehensive test afterwards with playwright mcp\
-    also make sure to Document your code appropriately\
-    Write clean, maintainable code following best practices\
-    Guidelines:
-    - Use existing patterns from the codebase
-    - Write comprehensive tests for new functionality
-    - Follow the project's coding standards
-    - Break complex features into smaller ones
-    - Do not use emojis!
+      slope = ((sum_w * sum_wxy) - (sum_wx * sum_wy)) / denominator
+      intercept = (sum_wy - slope * sum_wx) / sum_w
 
-● Read(docs\TASKS.md)
-  ⎿  Read 0 lines
+      # Calculate average demand
+      avg_demand = sum_wy / sum_w
 
-● Read(docs\TASKS.md)
-  ⎿  Read 160 lines (ctrl+o to expand)
+      # Growth rate = (slope / avg_demand) * 100
+      # This gives percentage change per month
+      if avg_demand > 0:
+          growth_rate_pct = (slope / avg_demand) * 100
+      else:
+          growth_rate_pct = 0.0
 
-●User approved Claude's plan:
-  ⎿  Enhanced Stockout Correction Implementation Plan
+      # Apply safety cap: ±50% per month
+      growth_rate_pct = max(-50.0, min(50.0, growth_rate_pct))
 
-     Executive Summary
+      # Calculate confidence based on data quality
+      # More data points = higher confidence
+      # Lower variance = higher confidence
+      confidence = min(1.0, (n - 5) / 7.0)  # 6 months = 0.14, 12+ months = 1.0
 
-     Implement a historical-based stockout correction algorithm with graduated floor fallback to properly handle Kentucky warehouse's severe 
-     stockout patterns while maintaining Burnaby's current working state.
+      return {
+          'growth_rate': growth_rate_pct / 100.0,  # Convert to decimal (0.05 = 5%)
+          'confidence': confidence,
+          'method_used': 'weighted_regression',
+          'data_points': n,
+          'slope': slope,
+          'avg_demand': avg_demand
+      }
 
-     Detailed Implementation Tasks
+  Category-Level Fallback:
 
-     TASK-317: Implement Historical-Based Stockout Correction (New)
+  def get_category_growth_rate(category: str) -> float:
+      """
+      Calculate category-average growth rate for SKUs without enough individual data.
+      
+      Uses all Active SKUs in category with >= 12 months data.
+      """
+      query = """
+          SELECT s.sku_id
+          FROM skus s
+          JOIN monthly_sales ms ON s.sku_id = ms.sku_id
+          WHERE s.category = %s
+            AND s.status = 'Active'
+          GROUP BY s.sku_id
+          HAVING COUNT(DISTINCT ms.year_month) >= 12
+      """
+      results = execute_query(query, params=(category,), fetch_all=True)
 
-     Phase 1: Core Algorithm Implementation
+      if not results:
+          return 0.0  # No category data
 
-     TASK-317.1: Create Historical Demand Lookup Function
-     - Add get_historical_demand_when_in_stock() function in database.py
-     - Query last 6-12 months where availability > 80%
-     - Calculate average demand from months with good stock
-     - Return None if insufficient historical data
-     - Add proper error handling and logging
+      # Calculate individual growth rates
+      growth_rates = []
+      for row in results:
+          gr = calculate_auto_growth_rate(row['sku_id'], months_window=12)
+          if gr['growth_rate'] is not None:
+              growth_rates.append(gr['growth_rate'])
 
-     TASK-317.2: Implement Graduated Floor Algorithm
-     - Modify correct_monthly_demand() in database.py
-     - Implement tiered correction:
-       - Availability >= 50%: No floor (trust actual data)
-       - Availability 20-50%: 20% floor
-       - Availability < 20%: 10% floor with 3x cap
-     - Document algorithm with clear examples
-     - Add unit tests for each tier
+      if not growth_rates:
+          return 0.0
 
-     TASK-317.3: Create Hybrid Correction Function
-     - Add correct_monthly_demand_hybrid() combining both approaches
-     - Try historical data first for severe stockouts (< 20% availability)
-     - Fall back to graduated floor if insufficient history
-     - Log which method was used for transparency
-     - Include warehouse-specific logic
+      # Return median (more robust than mean)
+      return statistics.median(growth_rates)
 
-     Phase 2: Integration with Existing Systems
+  Integration Points:
 
-     TASK-317.4: Update Database Recalculation
-     - Modify recalculate_all_corrected_demands() to use new algorithm
-     - Ensure both warehouses use consistent logic
-     - Add progress logging for large batch operations
-     - Handle edge cases (new SKUs, data anomalies)
+  1. In generate_forecast_for_sku() (backend/forecasting.py):
+  # Calculate growth rate
+  if manual_growth_override is not None:
+      growth_rate = manual_growth_override
+      growth_source = 'manual_override'
+  else:
+      # Auto-calculate
+      gr_result = calculate_auto_growth_rate(sku_id)
 
-     TASK-317.5: Fix WeightedDemandCalculator Fallbacks
-     - Replace direct correct_monthly_demand() calls (lines 534, 582)
-     - Fetch pre-calculated values from database instead
-     - Add database lookup helper function
-     - Ensure error handling doesn't bypass corrections
+      if gr_result['growth_rate'] is not None and gr_result['confidence'] >= 0.5:
+          growth_rate = gr_result['growth_rate']
+          growth_source = 'auto_sku_specific'
+      else:
+          # Fallback to category average
+          growth_rate = get_category_growth_rate(category)
+          growth_source = 'auto_category_average'
 
-     Phase 3: Testing and Validation
+  2. Frontend Display (frontend/forecasting.html):
+  - Add "Growth Rate" column in forecast results table
+  - Show source in tooltip (manual, auto-SKU, auto-category)
+  - Add toggle: "Use auto-calculated growth rates" (default ON)
 
-     TASK-317.6: Unit Testing
-     # Test cases to implement:
-     - test_graduated_floor_mild_stockout()    # < 50% out
-     - test_graduated_floor_moderate_stockout() # 50-80% out  
-     - test_graduated_floor_severe_stockout()   # > 80% out
-     - test_historical_lookup_sufficient_data()
-     - test_historical_lookup_insufficient_data()
-     - test_hybrid_uses_historical_when_available()
-     - test_hybrid_falls_back_to_graduated()
+  3. API Response Enhancement (backend/forecasting_api.py):
+  # Add growth_rate and growth_source to forecast results
+  {
+      "sku_id": "UB-YTX14-BS",
+      "base_demand": 2708,
+      "growth_rate": -0.37,  # -37% monthly decline
+      "growth_source": "auto_sku_specific",
+      "confidence": 0.85,
+      ...
+  }
 
-     TASK-317.7: Integration Testing
-     - Test LP-12V-NICD-13: Kentucky should show ~70-100 (not 30.15)
-     - Test UB-YTX14AH-BS: Burnaby should remain ~144
-     - Verify both warehouses calculate correctly
-     - Test edge cases (0 sales, 100% stockout, new SKUs)
+  Test Cases for V7.4
 
-     TASK-317.8: Playwright MCP Comprehensive Testing
-     - Navigate to transfer planning page
-     - Search for LP-12V-NICD-13
-     - Verify Kentucky demand shows corrected value (~70-100)
-     - Open SKU details modal
-     - Confirm both warehouse demands are correct
-     - Test 5-10 additional SKUs with various patterns
-     - Verify performance remains acceptable
+  1. UB-YTX14-BS (Declining SKU):
+    - Should detect negative growth rate (~-30 to -40%)
+    - Method: auto_sku_specific
+    - Confidence: high (69 months data)
+  2. New SKU with 4 months:
+    - Should use category average growth rate
+    - Method: auto_category_average
+    - Confidence: medium
+  3. Manual Override:
+    - User sets growth rate = 0.10 (10%)
+    - Should override auto-calculation
+    - Method: manual_override
+  4. Flat Trend SKU:
+    - SKU with stable demand (no growth/decline)
+    - Should detect ~0% growth rate
+    - Method: auto_sku_specific (flat_trend)
 
-     Phase 4: Documentation and Code Quality
+  Performance Target
 
-     TASK-317.9: Code Documentation
-     def correct_monthly_demand_hybrid(monthly_sales: int, stockout_days: int, 
-                                      days_in_month: int, sku_id: str, 
-                                      warehouse: str, year_month: str) -> float:
-         """
-         Calculate stockout-corrected demand using hybrid approach.
-         
-         Attempts historical lookup for severe stockouts, falls back to
-         graduated floor algorithm. This provides more accurate corrections
-         for Kentucky warehouse's frequent severe stockouts.
-         
-         Args:
-             monthly_sales: Actual sales for the month
-             stockout_days: Number of days item was out of stock
-             days_in_month: Total days in month (28-31)
-             sku_id: SKU identifier for historical lookup
-             warehouse: 'burnaby' or 'kentucky'
-             year_month: YYYY-MM format for context
-             
-         Returns:
-             Corrected demand accounting for stockout period
-             
-         Business Logic:
-             1. For severe stockouts (>80%), try historical average first
-             2. Use graduated floor based on stockout severity
-             3. Cap extreme corrections at 3x for data quality
-             
-         Example:
-             >>> correct_monthly_demand_hybrid(13, 27, 31, 'LP-12V-NICD-13', 
-             ...                              'kentucky', '2025-08')
-             75.0  # Based on historical average when in stock
-         """
+  - Growth rate calculation: < 50ms per SKU
+  - No significant impact on overall forecast time
 
-     TASK-317.10: Update Project Documentation
-     - Update CLAUDE.md with new algorithm explanation
-     - Add decision rationale to PRD-v2.md
-     - Document testing procedures
-     - Create troubleshooting guide
+  ---
+  Current File States
 
-     Phase 5: Deployment and Monitoring
+  Modified Files (Committed):
+  - backend/forecast_jobs.py (auto-sync added at lines 102-109)
+  - backend/forecasting.py (pattern detection at lines 732-847)
+  - docs/TASKS.md (V7.3 Phase 1&2 completed, Phase 3A & 4 planned)
 
-     TASK-317.11: Deployment Steps
-     1. Backup current corrected_demand values
-     2. Deploy new code with algorithm changes
-     3. Run recalculation for all SKUs
-     4. Clear cache to force fresh calculations
-     5. Monitor logs for any calculation errors
-     6. Verify key SKUs show expected values
+  Known Issues to Fix:
+  1. growth_rate_source shows empty string in database (line ~662-677 in backend/forecasting.py)
+  2. Debug print statements throughout forecasting.py (can be removed after validation)
 
-     TASK-317.12: Success Metrics
-     - LP-12V-NICD-13 Kentucky: Shows 70-100 (not 30.15)
-     - UB-YTX14AH-BS Burnaby: Maintains ~144
-     - No SKUs show demand < sales when stockouts present
-     - 95% of corrections complete without fallback errors
-     - Performance remains < 30 seconds for full recalculation
+  Database State:
+  - monthly_sales.stockout_days properly synced for 504 SKUs
+  - forecast_details table has all necessary columns
+  - No schema changes needed for Phase 3A
 
-     Implementation Order
+  ---
+  Key Technical Concepts
 
-     1. Core algorithm functions (317.1-317.3)
-     2. Integration updates (317.4-317.5)
-     3. Run recalculation and test
-     4. Playwright verification (317.8)
-     5. Documentation (317.9-317.10)
+  Test & Learn Pattern: Industry-standard approach for new SKU forecasting that detects launch spikes and early stockouts to avoid under-forecasting successful test
+  products.
 
-     Risk Mitigation
+  Availability Rate: (days_in_month - stockout_days) / days_in_month. Used to filter months for baseline calculations.
 
-     - Backup database before changes
-     - Test on subset of SKUs first
-     - Keep old algorithm available for rollback
-     - Monitor logs during deployment
+  Clean Months: Months with availability_rate >= 0.3 (30%). Below this threshold indicates severe stockout distortion.
 
-     This comprehensive plan ensures Kentucky gets proper stockout corrections while maintaining system stability and code quality.
+  Expert Validation: Methodology reviewed in docs/claudesuggestion.md and docs/claudesuggestions2.md.
 
-● Now let me start implementing. First, I'll update TASKS.md with the detailed plan:
+  ---
+  Testing Recommendations
 
-● Update(docs\TASKS.md)
-  ⎿  Updated docs\TASKS.md with 115 additions
-       2338    
-       2339    ---
-       2340    
-       2341 +  ### 🧮 **TASK-317: Implement Historical-Based Stockout Correction** (Started: September 20, 2025)
-       2342 +  
-       2343 +  **Objective**: Replace the restrictive 30% floor with a hybrid historical-based approach that provides more accurate demand 
-            + corrections for Kentucky warehouse's severe stockout patterns.
-       2344 +  
-       2345 +  **Problem**: Kentucky warehouse shows underestimated demand (e.g., LP-12V-NICD-13 shows 30.15 instead of expected 70-100) 
-            + due to 30% floor limiting corrections during severe stockouts.
-       2346 +  
-       2347 +  #### Phase 1: Core Algorithm Implementation
-       2348 +  
-       2349 +  - [ ] **TASK-317.1**: Create Historical Demand Lookup Function
-       2350 +    - [ ] Add get_historical_demand_when_in_stock() function in database.py
-       2351 +    - [ ] Query last 6-12 months where availability > 80%
-       2352 +    - [ ] Calculate average demand from months with good stock availability
-       2353 +    - [ ] Return None if insufficient historical data (< 2 months)
-       2354 +    - [ ] Add proper error handling and logging for database queries
-       2355 +  
-       2356 +  - [ ] **TASK-317.2**: Implement Graduated Floor Algorithm
-       2357 +    - [ ] Modify correct_monthly_demand() in database.py with tiered approach
-       2358 +    - [ ] Availability >= 50%: No floor (trust actual availability calculation)
-       2359 +    - [ ] Availability 20-50%: 20% floor for moderate protection
-       2360 +    - [ ] Availability < 20%: 10% floor with 3x cap for severe stockouts
-       2361 +    - [ ] Document algorithm with clear business examples
-       2362 +    - [ ] Add comprehensive unit tests for each tier
-       2363 +  
-       2364 +  - [ ] **TASK-317.3**: Create Hybrid Correction Function
-       2365 +    - [ ] Add correct_monthly_demand_hybrid() combining both approaches
-       2366 +    - [ ] Try historical data first for severe stockouts (< 20% availability)
-       2367 +    - [ ] Fall back to graduated floor if insufficient historical data
-       2368 +    - [ ] Log which method was used for calculation transparency
-       2369 +    - [ ] Include warehouse-specific logic and edge case handling
-       2370 +  
-       2371 +  #### Phase 2: Integration with Existing Systems
-       2372 +  
-       2373 +  - [ ] **TASK-317.4**: Update Database Recalculation
-       2374 +    - [ ] Modify recalculate_all_corrected_demands() to use new hybrid algorithm
-       2375 +    - [ ] Ensure both warehouses (Burnaby/Kentucky) use consistent logic
-       2376 +    - [ ] Add progress logging for large batch operations (76,000+ records)
-       2377 +    - [ ] Handle edge cases (new SKUs, data anomalies, zero sales)
-       2378 +    - [ ] Add validation to prevent invalid corrections
-       2379 +  
-       2380 +  - [ ] **TASK-317.5**: Fix WeightedDemandCalculator Fallbacks
-       2381 +    - [ ] Replace direct correct_monthly_demand() calls (lines 534, 582)
-       2382 +    - [ ] Create database lookup helper for pre-calculated corrected values
-       2383 +    - [ ] Ensure error handling doesn't bypass stockout corrections
-       2384 +    - [ ] Add logging for fallback usage tracking
-       2385 +  
-       2386 +  #### Phase 3: Testing and Validation
-       2387 +  
-       2388 +  - [ ] **TASK-317.6**: Unit Testing
-       2389 +    - [ ] test_graduated_floor_mild_stockout() for < 50% stockout scenarios
-       2390 +    - [ ] test_graduated_floor_moderate_stockout() for 50-80% stockout scenarios
-       2391 +    - [ ] test_graduated_floor_severe_stockout() for > 80% stockout scenarios
-       2392 +    - [ ] test_historical_lookup_sufficient_data() with good historical data
-       2393 +    - [ ] test_historical_lookup_insufficient_data() fallback scenarios
-       2394 +    - [ ] test_hybrid_uses_historical_when_available() priority logic
-       2395 +    - [ ] test_hybrid_falls_back_to_graduated() when history unavailable
-       2396 +  
-       2397 +  - [ ] **TASK-317.7**: Integration Testing
-       2398 +    - [ ] Test LP-12V-NICD-13: Kentucky should show ~70-100 (not 30.15)
-       2399 +    - [ ] Test UB-YTX14AH-BS: Burnaby should maintain ~144 (regression test)
-       2400 +    - [ ] Verify both warehouses calculate correctly with new algorithm
-       2401 +    - [ ] Test edge cases (0 sales, 100% stockout, new SKUs, leap years)
-       2402 +    - [ ] Compare results with manual calculations for validation
-       2403 +  
-       2404 +  - [ ] **TASK-317.8**: Playwright MCP Comprehensive Testing
-       2405 +    - [ ] Navigate to transfer planning page and verify page loads
-       2406 +    - [ ] Search for LP-12V-NICD-13 and verify Kentucky demand shows ~70-100
-       2407 +    - [ ] Open SKU details modal and confirm both warehouse demands
-       2408 +    - [ ] Test 5-10 additional SKUs with various stockout patterns
-       2409 +    - [ ] Verify transfer recommendations reflect corrected demand
-       2410 +    - [ ] Test performance remains acceptable (< 5 seconds page load)
-       2411 +  
-       2412 +  #### Phase 4: Documentation and Code Quality
-       2413 +  
-       2414 +  - [ ] **TASK-317.9**: Comprehensive Code Documentation
-       2415 +    - [ ] Add detailed docstrings to all new functions with Args/Returns/Examples
-       2416 +    - [ ] Document hybrid algorithm decision logic with business rationale
-       2417 +    - [ ] Add inline comments explaining complex calculations
-       2418 +    - [ ] Update API documentation for any modified endpoints
-       2419 +    - [ ] Follow project documentation standards (no emojis, clear examples)
-       2420 +  
-       2421 +  - [ ] **TASK-317.10**: Update Project Documentation
-       2422 +    - [ ] Update CLAUDE.md with new algorithm explanation and examples
-       2423 +    - [ ] Add decision rationale to PRD-v2.md
-       2424 +    - [ ] Document testing procedures and validation methods
-       2425 +    - [ ] Create troubleshooting guide for stockout correction issues
-       2426 +  
-       2427 +  #### Phase 5: Deployment and Monitoring
-       2428 +  
-       2429 +  - [ ] **TASK-317.11**: Deployment Steps
-       2430 +    - [ ] Backup current corrected_demand values before changes
-       2431 +    - [ ] Deploy new code with hybrid algorithm implementation
-       2432 +    - [ ] Run recalculation for all SKUs (expect ~30 second runtime)
-       2433 +    - [ ] Clear cache to force fresh calculations
-       2434 +    - [ ] Monitor logs for any calculation errors or warnings
-       2435 +    - [ ] Verify key test SKUs show expected corrected values
-       2436 +  
-       2437 +  - [ ] **TASK-317.12**: Success Metrics Validation
-       2438 +    - [ ] LP-12V-NICD-13 Kentucky: Shows 70-100 demand (not 30.15)
-       2439 +    - [ ] UB-YTX14AH-BS Burnaby: Maintains ~144 demand (regression check)
-       2440 +    - [ ] No SKUs show demand < raw sales when stockouts are present
-       2441 +    - [ ] 95% of corrections complete without fallback errors
-       2442 +    - [ ] Performance remains < 30 seconds for full dataset recalculation
-       2443 +    - [ ] Cache invalidation and repopulation works correctly
-       2444 +  
-       2445 +  #### Success Criteria:
-       2446 +  - [ ] Kentucky warehouse gets proper corrections for severe stockouts
-       2447 +  - [ ] Historical data used when available for more accurate predictions
-       2448 +  - [ ] Graduated floor prevents overcorrection while allowing aggressive correction
-       2449 +  - [ ] Both warehouses maintain accurate demand calculations
-       2450 +  - [ ] All code follows project standards with comprehensive documentation
-       2451 +  - [ ] Playwright tests pass for corrected demand scenarios
-       2452 +  - [ ] Performance and data integrity maintained throughout changes
-       2453 +  
-       2454 +  ---
-       2455 +  
-       2456    ## 📞 Escalation & Support
-       2457    
-       2458    ### Issue Categories
+  Always Test With:
+  - UB-YTX7A-BS (new SKU, 9 months, has pattern)
+  - UB-YTX14-BS (established SKU, 69 months, regression test)
+  - Find a 3-4 month SKU without pattern (for similar SKU matching test)
 
-● Now let me implement the core algorithm. First, I'll add the historical demand lookup function to database.py:
+  Playwright Testing:
+  - Generate forecast via UI
+  - Check debug logs in server output
+  - Query database to verify results
+  - Export and verify CSV
 
-● Read(backend\database.py)
+  ---
+  Important Notes
+
+  1. Do not implement pending inventory checks - User confirmed this belongs in future ordering page, not forecasting.
+  2. Do not use growth rate from similar SKUs yet - Needs validation that similar SKU trends are actually predictive.
+  3. Queue Management is Phase 4 - Only start after Phase 3A is complete and tested.
+  4. Debug logs can stay for now - Remove only after Phase 3A & 4 are stable in production.
+  5. All code changes must follow project standards - No emojis, comprehensive docstrings, files under 500 lines.
+
+  ---
+  This context should be sufficient for the next Claude Code instance to continue implementation of Phase 3A and beyond.

@@ -2519,7 +2519,19 @@ PO-2024-003,Yuasa Battery,2024-02-01,2024-05-25,kentucky,false,
                         <small class="text-muted">${sizeText} - Modified: ${new Date(file.lastModified).toLocaleString()}</small>
                     </div>
                 </div>
+
+                <div class="btn-group mt-3" role="group">
+                    <button type="button" class="btn btn-primary" onclick="showSupplierMappingModal(window.currentFile, 'admin')">
+                        <i class="fas fa-link me-2"></i>Map Suppliers & Import
+                    </button>
+                    <button type="button" class="btn btn-outline-secondary" onclick="validateSupplierFile()">
+                        <i class="fas fa-check-circle me-2"></i>Validate Only
+                    </button>
+                </div>
             `;
+
+            // Store file for later use
+            window.currentFile = file;
 
             fileInfo.style.display = 'block';
         }
@@ -2844,6 +2856,653 @@ PO-2024-003,Yuasa Battery,2024-02-01,2024-05-25,kentucky,false,
             setupSupplierFileUpload();
         });
 
+        // =============================================================================
+        // SUPPLIER MAPPING FUNCTIONALITY
+        // =============================================================================
+
+        /**
+         * Show supplier mapping modal with mapping suggestions
+         * Called before processing supplier import to map supplier names
+         *
+         * @param {File} file - The CSV file to analyze
+         * @param {string} uploadedBy - Username uploading the file
+         */
+        async function showSupplierMappingModal(file, uploadedBy) {
+            try {
+                // Show progress while analyzing file
+                showSupplierUploadProgress(true);
+                updateSupplierProgress(10, 'Analyzing supplier names...');
+
+                // Get mapping suggestions from API
+                const formData = new FormData();
+                formData.append('file', file);
+
+                const response = await fetch('/api/supplier/import/preview', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    throw new Error(`Failed to analyze suppliers: ${errorText}`);
+                }
+
+                const previewData = await response.json();
+
+                // Validate response data
+                if (!previewData || typeof previewData.total_suppliers === 'undefined') {
+                    throw new Error('Invalid response from server');
+                }
+
+                updateSupplierProgress(50, 'Found ' + previewData.total_suppliers + ' unique suppliers');
+
+                // Hide progress and show mapping modal
+                showSupplierUploadProgress(false);
+
+                // Create and show mapping modal
+                createSupplierMappingModal(previewData, file, uploadedBy);
+
+            } catch (error) {
+                console.error('Supplier mapping preview error:', error);
+                showSupplierUploadProgress(false);
+                alert('Failed to analyze supplier names: ' + error.message);
+            }
+        }
+
+        /**
+         * Create and display the supplier mapping modal
+         *
+         * @param {Object} previewData - Preview data from API
+         * @param {File} file - Original CSV file
+         * @param {string} uploadedBy - Username uploading the file
+         */
+        function createSupplierMappingModal(previewData, file, uploadedBy) {
+            // Remove existing modal if present
+            const existingModal = document.getElementById('supplierMappingModal');
+            if (existingModal) {
+                existingModal.remove();
+            }
+
+            // Create modal HTML
+            const modalHtml = `
+                <div class="modal fade" id="supplierMappingModal" tabindex="-1" data-bs-backdrop="static" data-bs-keyboard="false">
+                    <div class="modal-dialog modal-xl">
+                        <div class="modal-content">
+                            <div class="modal-header">
+                                <h5 class="modal-title">
+                                    <i class="fas fa-link me-2"></i>Supplier Name Mapping
+                                </h5>
+                                <button type="button" class="btn-close" data-bs-dismiss="modal" onclick="cancelSupplierMapping()"></button>
+                            </div>
+                            <div class="modal-body">
+                                <div class="alert alert-info">
+                                    <i class="fas fa-info-circle me-2"></i>
+                                    <strong>Found ${previewData.total_suppliers} unique suppliers in your CSV file.</strong>
+                                    Please review the mapping suggestions below and confirm how each supplier name should be handled.
+                                </div>
+
+                                <div class="mapping-stats mb-3">
+                                    <div class="row">
+                                        <div class="col-md-4">
+                                            <div class="stat-card bg-primary text-white">
+                                                <div class="stat-number">${previewData.total_suppliers}</div>
+                                                <div class="stat-label">Total Suppliers</div>
+                                            </div>
+                                        </div>
+                                        <div class="col-md-4">
+                                            <div class="stat-card bg-success text-white">
+                                                <div class="stat-number" id="mapped-count">0</div>
+                                                <div class="stat-label">Mapped</div>
+                                            </div>
+                                        </div>
+                                        <div class="col-md-4">
+                                            <div class="stat-card bg-warning text-dark">
+                                                <div class="stat-number">${previewData.estimated_new_suppliers}</div>
+                                                <div class="stat-label">New Suppliers</div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div class="table-responsive">
+                                    <table class="table table-striped">
+                                        <thead class="table-dark">
+                                            <tr>
+                                                <th style="width: 25%">CSV Supplier Name</th>
+                                                <th style="width: 35%">Suggested Match</th>
+                                                <th style="width: 25%">Action</th>
+                                                <th style="width: 15%">Status</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="supplier-mapping-body">
+                                            <!-- Mapping rows will be generated here -->
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                            <div class="modal-footer">
+                                <button type="button" class="btn btn-secondary" onclick="cancelSupplierMapping()">
+                                    <i class="fas fa-times me-2"></i>Cancel
+                                </button>
+                                <button type="button" class="btn btn-success" onclick="proceedWithMapping()" id="proceed-mapping-btn">
+                                    <i class="fas fa-check me-2"></i>Proceed with Import
+                                    <span class="badge bg-light text-dark ms-2" id="ready-count">0/${previewData.total_suppliers}</span>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+
+            // Add modal to page
+            document.body.insertAdjacentHTML('beforeend', modalHtml);
+
+            // Generate mapping rows
+            generateSupplierMappingRows(previewData);
+
+            // Store data for later use
+            window.currentMappingData = {
+                previewData: previewData,
+                file: file,
+                uploadedBy: uploadedBy,
+                mappings: {}
+            };
+
+            // Show modal
+            const modal = new bootstrap.Modal(document.getElementById('supplierMappingModal'));
+            modal.show();
+
+            // Load all suppliers for dropdowns
+            loadAllSuppliersForMapping();
+        }
+
+        /**
+         * Generate mapping rows for each unique supplier
+         *
+         * @param {Object} previewData - Preview data containing suppliers and suggestions
+         */
+        function generateSupplierMappingRows(previewData) {
+            const tbody = document.getElementById('supplier-mapping-body');
+            let rowsHtml = '';
+
+            previewData.unique_suppliers.forEach((supplierName, index) => {
+                const suggestions = previewData.mapping_suggestions[supplierName] || [];
+                const bestMatch = suggestions.length > 0 ? suggestions[0] : null;
+
+                // Determine confidence level and badge
+                let confidenceBadge = '<span class="badge bg-secondary">No Match</span>';
+                let defaultAction = 'create';
+                let defaultActionText = 'Create New';
+
+                if (bestMatch) {
+                    if (bestMatch.confidence >= 90) {
+                        confidenceBadge = `<span class="badge bg-success">${bestMatch.confidence}% Match</span>`;
+                        defaultAction = 'map';
+                        defaultActionText = 'Use Match';
+                    } else if (bestMatch.confidence >= 70) {
+                        confidenceBadge = `<span class="badge bg-warning text-dark">${bestMatch.confidence}% Match</span>`;
+                        defaultAction = 'manual';
+                        defaultActionText = 'Review';
+                    }
+                }
+
+                rowsHtml += `
+                    <tr id="mapping-row-${index}" data-supplier-name="${supplierName}">
+                        <td>
+                            <strong>${supplierName}</strong>
+                        </td>
+                        <td>
+                            ${bestMatch ? `
+                                <div class="suggested-match">
+                                    <i class="fas fa-building me-2 text-muted"></i>
+                                    <strong>${bestMatch.display_name}</strong>
+                                    <div class="small text-muted">
+                                        ${bestMatch.match_type} match • ${confidenceBadge}
+                                    </div>
+                                </div>
+                            ` : `
+                                <div class="no-match text-muted">
+                                    <i class="fas fa-question-circle me-2"></i>
+                                    No similar suppliers found
+                                </div>
+                            `}
+                        </td>
+                        <td>
+                            <div class="action-controls">
+                                ${bestMatch && bestMatch.confidence >= 70 ? `
+                                    <button class="btn btn-sm btn-outline-success me-1 ${defaultAction === 'map' ? 'active' : ''}"
+                                            onclick="setMapping('${supplierName}', 'map', ${bestMatch.supplier_id}, '${bestMatch.display_name}')">
+                                        <i class="fas fa-check"></i> Use Match
+                                    </button>
+                                ` : ''}
+                                <div class="dropdown d-inline-block">
+                                    <button class="btn btn-sm btn-outline-primary dropdown-toggle me-1" type="button"
+                                            data-bs-toggle="dropdown">
+                                        <i class="fas fa-list"></i> Select
+                                    </button>
+                                    <ul class="dropdown-menu" id="dropdown-${index}">
+                                        <li><span class="dropdown-header">Loading suppliers...</span></li>
+                                    </ul>
+                                </div>
+                                <button class="btn btn-sm btn-outline-secondary ${defaultAction === 'create' ? 'active' : ''}"
+                                        onclick="setMapping('${supplierName}', 'create', null, null)">
+                                    <i class="fas fa-plus"></i> Create New
+                                </button>
+                            </div>
+                        </td>
+                        <td>
+                            <span class="status-indicator badge bg-secondary" id="status-${index}">Pending</span>
+                        </td>
+                    </tr>
+                `;
+            });
+
+            tbody.innerHTML = rowsHtml;
+
+            // Auto-set high confidence matches
+            previewData.unique_suppliers.forEach((supplierName, index) => {
+                const suggestions = previewData.mapping_suggestions[supplierName] || [];
+                const bestMatch = suggestions.length > 0 ? suggestions[0] : null;
+
+                if (bestMatch && bestMatch.confidence >= 90) {
+                    // Auto-select high confidence matches
+                    setMapping(supplierName, 'map', bestMatch.supplier_id, bestMatch.display_name);
+                } else if (!bestMatch) {
+                    // Auto-select create new for no matches
+                    setMapping(supplierName, 'create', null, null);
+                }
+            });
+        }
+
+        /**
+         * Load all suppliers for dropdown selection
+         */
+        async function loadAllSuppliersForMapping() {
+            try {
+                const response = await fetch('/api/suppliers');
+                if (!response.ok) {
+                    throw new Error('Failed to load suppliers');
+                }
+
+                const data = await response.json();
+                const suppliers = data.suppliers || [];
+
+                // Update all dropdown menus
+                if (!window.currentMappingData || !window.currentMappingData.previewData) {
+                    console.error('No mapping data available');
+                    return;
+                }
+                const previewData = window.currentMappingData.previewData;
+                previewData.unique_suppliers.forEach((supplierName, index) => {
+                    const dropdown = document.getElementById(`dropdown-${index}`);
+                    if (dropdown) {
+                        let optionsHtml = '';
+
+                        if (suppliers.length > 0) {
+                            suppliers.forEach(supplier => {
+                                optionsHtml += `
+                                    <li>
+                                        <a class="dropdown-item" href="#"
+                                           onclick="setMapping('${supplierName}', 'map', ${supplier.id}, '${supplier.display_name}')">
+                                            <i class="fas fa-building me-2"></i>${supplier.display_name}
+                                        </a>
+                                    </li>
+                                `;
+                            });
+                        } else {
+                            optionsHtml = '<li><span class="dropdown-header">No suppliers found</span></li>';
+                        }
+
+                        dropdown.innerHTML = optionsHtml;
+                    }
+                });
+
+            } catch (error) {
+                console.error('Failed to load suppliers:', error);
+            }
+        }
+
+        /**
+         * Set mapping for a supplier name
+         *
+         * @param {string} supplierName - Original supplier name from CSV
+         * @param {string} action - 'map' or 'create'
+         * @param {number|null} supplierId - ID of mapped supplier (for 'map' action)
+         * @param {string|null} displayName - Display name of mapped supplier
+         */
+        function setMapping(supplierName, action, supplierId, displayName) {
+            if (!window.currentMappingData || !window.currentMappingData.previewData) {
+                console.error('No mapping data available');
+                return;
+            }
+            const index = window.currentMappingData.previewData.unique_suppliers.indexOf(supplierName);
+            if (index === -1) return;
+
+            // Store mapping
+            window.currentMappingData.mappings[supplierName] = {
+                action: action,
+                supplier_id: supplierId,
+                display_name: displayName
+            };
+
+            // Update status indicator
+            const statusElement = document.getElementById(`status-${index}`);
+            const row = document.getElementById(`mapping-row-${index}`);
+
+            if (action === 'map') {
+                statusElement.className = 'status-indicator badge bg-success';
+                statusElement.textContent = 'Mapped';
+                row.classList.add('table-success');
+            } else if (action === 'create') {
+                statusElement.className = 'status-indicator badge bg-info';
+                statusElement.textContent = 'New';
+                row.classList.add('table-info');
+            }
+
+            // Update button states
+            const buttons = row.querySelectorAll('.action-controls button');
+            buttons.forEach(btn => btn.classList.remove('active'));
+
+            if (action === 'map') {
+                const useButton = row.querySelector('button[onclick*="map"]');
+                if (useButton) useButton.classList.add('active');
+            } else if (action === 'create') {
+                const createButton = row.querySelector('button[onclick*="create"]');
+                if (createButton) createButton.classList.add('active');
+            }
+
+            // Update counters
+            updateMappingCounters();
+        }
+
+        /**
+         * Update mapping status counters
+         */
+        function updateMappingCounters() {
+            if (!window.currentMappingData || !window.currentMappingData.previewData) {
+                console.error('No mapping data available');
+                return;
+            }
+            const mappings = window.currentMappingData.mappings;
+            const totalSuppliers = window.currentMappingData.previewData.total_suppliers;
+
+            const readyCount = Object.keys(mappings).length;
+            const mappedCount = Object.values(mappings).filter(m => m.action === 'map').length;
+
+            document.getElementById('ready-count').textContent = `${readyCount}/${totalSuppliers}`;
+            document.getElementById('mapped-count').textContent = mappedCount;
+
+            // Enable/disable proceed button
+            const proceedBtn = document.getElementById('proceed-mapping-btn');
+            proceedBtn.disabled = readyCount < totalSuppliers;
+        }
+
+        /**
+         * Cancel supplier mapping and return to file selection
+         */
+        function cancelSupplierMapping() {
+            const modal = bootstrap.Modal.getInstance(document.getElementById('supplierMappingModal'));
+            if (modal) {
+                modal.hide();
+            }
+
+            // Clear stored mapping data
+            window.currentMappingData = null;
+
+            // Reset file input
+            const fileInput = document.getElementById('supplier-file-input');
+            if (fileInput) {
+                fileInput.value = '';
+            }
+
+            // Hide file info
+            const fileInfo = document.getElementById('supplier-file-info');
+            if (fileInfo) {
+                fileInfo.style.display = 'none';
+            }
+        }
+
+        /**
+         * Proceed with import using confirmed mappings
+         */
+        async function proceedWithMapping() {
+            try {
+                const mappingData = window.currentMappingData;
+                if (!mappingData) {
+                    throw new Error('No mapping data available');
+                }
+
+                // Hide modal
+                const modal = bootstrap.Modal.getInstance(document.getElementById('supplierMappingModal'));
+                if (modal) {
+                    modal.hide();
+                }
+
+                // Show progress
+                showSupplierUploadProgress(true);
+                updateSupplierProgress(10, 'Processing supplier mappings...');
+
+                // Process mappings - create new suppliers first
+                const newSuppliers = [];
+                for (const [supplierName, mapping] of Object.entries(mappingData.mappings)) {
+                    if (mapping.action === 'create') {
+                        newSuppliers.push(supplierName);
+                    }
+                }
+
+                // Create new suppliers
+                for (const supplierName of newSuppliers) {
+                    try {
+                        const response = await fetch('/api/suppliers', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json'
+                            },
+                            body: JSON.stringify({
+                                display_name: supplierName,
+                                created_by: mappingData.uploadedBy
+                            })
+                        });
+
+                        if (response.ok) {
+                            const result = await response.json();
+                            // Update mapping with new supplier ID
+                            mappingData.mappings[supplierName].supplier_id = result.supplier_id;
+                            mappingData.mappings[supplierName].display_name = result.supplier.display_name;
+                        }
+                    } catch (error) {
+                        console.error(`Failed to create supplier ${supplierName}:`, error);
+                    }
+                }
+
+                updateSupplierProgress(50, 'Importing supplier shipments...');
+
+                // Now proceed with original import, modified to use mappings
+                await processSupplierImportWithMappings(mappingData);
+
+            } catch (error) {
+                console.error('Error proceeding with mapping:', error);
+                showSupplierUploadProgress(false);
+                alert('Failed to process supplier mappings: ' + error.message);
+            }
+        }
+
+        /**
+         * Process supplier import with confirmed mappings
+         *
+         * @param {Object} mappingData - Mapping data with file and mappings
+         */
+        async function processSupplierImportWithMappings(mappingData) {
+            try {
+                // For now, save mappings as aliases and proceed with normal import
+                // In the future, this could be enhanced to apply mappings during import
+
+                // Save all mappings as aliases for future use
+                for (const [originalName, mapping] of Object.entries(mappingData.mappings)) {
+                    if (mapping.supplier_id) {
+                        try {
+                            await fetch('/api/supplier/aliases', {
+                                method: 'POST',
+                                headers: {
+                                    'Content-Type': 'application/json'
+                                },
+                                body: JSON.stringify({
+                                    original_name: originalName,
+                                    supplier_id: mapping.supplier_id,
+                                    confidence: 100.0,
+                                    created_by: mappingData.uploadedBy
+                                })
+                            });
+                        } catch (error) {
+                            console.error(`Failed to save alias for ${originalName}:`, error);
+                        }
+                    }
+                }
+
+                updateSupplierProgress(75, 'Processing CSV import...');
+
+                // Proceed with normal supplier import
+                const formData = new FormData();
+                formData.append('file', mappingData.file);
+                formData.append('uploaded_by', mappingData.uploadedBy);
+
+                const response = await fetch('/api/supplier/shipments/import', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.detail || 'Import failed');
+                }
+
+                const result = await response.json();
+                updateSupplierProgress(100, 'Import completed!');
+
+                // Hide progress and show results
+                setTimeout(() => {
+                    showSupplierUploadProgress(false);
+                    displaySupplierImportResults(result);
+                }, 1000);
+
+                // Clear mapping data
+                window.currentMappingData = null;
+
+            } catch (error) {
+                console.error('Import error:', error);
+                showSupplierUploadProgress(false);
+                displaySupplierImportResults({
+                    success: false,
+                    errors: [error.message],
+                    warnings: [],
+                    stats: { total_rows: 0, successful_imports: 0, error_rows: 1 }
+                });
+            }
+        }
+
+        /**
+         * Modified handleSupplierFile to use mapping workflow
+         * Now shows mapping modal before proceeding with import
+         */
+        function handleSupplierFileWithMapping(file) {
+            const fileInfo = document.getElementById('supplier-file-info');
+            const fileDetails = document.getElementById('supplier-file-details');
+
+            if (file.size > 50 * 1024 * 1024) { // 50MB limit
+                alert('File size exceeds 50MB limit. Please select a smaller file.');
+                return;
+            }
+
+            // Display file information
+            const sizeText = (file.size / 1024 / 1024).toFixed(2) + ' MB';
+            fileDetails.innerHTML = `
+                <div class="d-flex align-items-center">
+                    <i class="fas fa-file-csv text-success me-2"></i>
+                    <div>
+                        <strong>${file.name}</strong><br>
+                        <small class="text-muted">${sizeText}</small>
+                    </div>
+                </div>
+
+                <div class="btn-group mt-3" role="group">
+                    <button type="button" class="btn btn-primary" onclick="showSupplierMappingModal(window.currentFile, 'admin')">
+                        <i class="fas fa-link me-2"></i>Map Suppliers & Import
+                    </button>
+                    <button type="button" class="btn btn-outline-secondary" onclick="validateSupplierFile()">
+                        <i class="fas fa-check-circle me-2"></i>Validate Only
+                    </button>
+                </div>
+            `;
+
+            // Store file for later use
+            window.currentFile = file;
+
+            fileInfo.style.display = 'block';
+        }
+
     </script>
+
+    <!-- Supplier Mapping Modal CSS -->
+    <style>
+        .mapping-stats .stat-card {
+            padding: 15px;
+            border-radius: 8px;
+            text-align: center;
+            margin-bottom: 10px;
+        }
+
+        .mapping-stats .stat-number {
+            font-size: 1.5em;
+            font-weight: bold;
+        }
+
+        .mapping-stats .stat-label {
+            font-size: 0.85em;
+            opacity: 0.8;
+        }
+
+        .suggested-match {
+            padding: 8px;
+            background-color: #f8f9fa;
+            border-radius: 4px;
+            border-left: 3px solid #28a745;
+        }
+
+        .no-match {
+            padding: 8px;
+            font-style: italic;
+        }
+
+        .action-controls .btn.active {
+            background-color: #0d6efd;
+            color: white;
+            border-color: #0d6efd;
+        }
+
+        .table-success {
+            background-color: #d1e7dd !important;
+        }
+
+        .table-info {
+            background-color: #cfe2ff !important;
+        }
+
+        .status-indicator {
+            font-size: 0.75em;
+            padding: 4px 8px;
+        }
+
+        #supplierMappingModal .modal-dialog {
+            max-width: 1200px;
+        }
+
+        #supplierMappingModal .table th {
+            position: sticky;
+            top: 0;
+            background-color: #212529 !important;
+            z-index: 10;
+        }
+    </style>
+
 </body>
 </html>

@@ -182,6 +182,231 @@ Completely separate from transfer planning to maintain system stability.
             height: 200px;
         }
 
+        .loading-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(255, 255, 255, 0.9);
+            display: none;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+            border-radius: 12px;
+        }
+
+        .progress-container {
+            position: relative;
+            width: 100%;
+            max-width: 300px;
+            text-align: center;
+        }
+
+        .progress-spinner {
+            margin-bottom: 1rem;
+        }
+
+        .progress-text {
+            font-size: 0.875rem;
+            color: #6b7280;
+            margin-bottom: 0.5rem;
+        }
+
+        .progress-bar-custom {
+            height: 4px;
+            background: #e5e7eb;
+            border-radius: 2px;
+            overflow: hidden;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, var(--primary-blue), #3b82f6);
+            border-radius: 2px;
+            width: 0%;
+            transition: width 0.3s ease;
+        }
+
+        .chart-container {
+            position: relative;
+        }
+
+        .table-container {
+            position: relative;
+        }
+
+        .kpi-card {
+            position: relative;
+        }
+
+        .loading-skeleton {
+            background: linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%);
+            background-size: 200% 100%;
+            animation: loading 1.5s infinite;
+        }
+
+        @keyframes loading {
+            0% { background-position: 200% 0; }
+            100% { background-position: -200% 0; }
+        }
+
+        .skeleton-card {
+            background: white;
+            border-radius: 12px;
+            padding: 1.5rem;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+        }
+
+        .skeleton-line {
+            height: 1rem;
+            margin-bottom: 0.75rem;
+            border-radius: 4px;
+        }
+
+        .skeleton-line.short {
+            width: 60%;
+        }
+
+        .skeleton-line.medium {
+            width: 80%;
+        }
+
+        .skeleton-line.long {
+            width: 100%;
+        }
+
+        /* Tooltip Styles */
+        .tooltip-icon {
+            display: inline-block;
+            width: 16px;
+            height: 16px;
+            background: var(--primary-blue);
+            border-radius: 50%;
+            color: white;
+            text-align: center;
+            line-height: 16px;
+            font-size: 10px;
+            margin-left: 5px;
+            cursor: help;
+            position: relative;
+        }
+
+        .custom-tooltip {
+            position: absolute;
+            background: #1f2937;
+            color: white;
+            padding: 8px 12px;
+            border-radius: 6px;
+            font-size: 0.875rem;
+            white-space: nowrap;
+            z-index: 1050;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            opacity: 0;
+            visibility: hidden;
+            transform: translateY(-5px);
+            transition: all 0.2s ease;
+        }
+
+        .custom-tooltip.show {
+            opacity: 1;
+            visibility: visible;
+            transform: translateY(0);
+        }
+
+        .custom-tooltip::after {
+            content: '';
+            position: absolute;
+            top: 100%;
+            left: 50%;
+            transform: translateX(-50%);
+            border: 5px solid transparent;
+            border-top-color: #1f2937;
+        }
+
+        /* Error Handling Styles */
+        .error-boundary {
+            background: #fef2f2;
+            border: 1px solid #fecaca;
+            border-radius: 8px;
+            padding: 1rem;
+            margin: 1rem 0;
+        }
+
+        .error-title {
+            color: var(--danger-red);
+            font-weight: 600;
+            margin-bottom: 0.5rem;
+        }
+
+        .error-details {
+            color: #6b7280;
+            font-size: 0.875rem;
+            margin-bottom: 1rem;
+        }
+
+        .error-actions {
+            display: flex;
+            gap: 0.5rem;
+        }
+
+        .retry-btn {
+            background: var(--danger-red);
+            border: none;
+            color: white;
+            padding: 0.5rem 1rem;
+            border-radius: 4px;
+            font-size: 0.875rem;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        .retry-btn:hover {
+            background: #b91c1c;
+        }
+
+        .dismiss-btn {
+            background: transparent;
+            border: 1px solid #d1d5db;
+            color: #6b7280;
+            padding: 0.5rem 1rem;
+            border-radius: 4px;
+            font-size: 0.875rem;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .dismiss-btn:hover {
+            background: #f9fafb;
+            border-color: #9ca3af;
+        }
+
+        .connection-status {
+            position: fixed;
+            top: 70px;
+            right: 20px;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+            padding: 0.75rem 1rem;
+            z-index: 1060;
+            display: none;
+        }
+
+        .connection-status.online {
+            border-left: 4px solid var(--success-green);
+        }
+
+        .connection-status.offline {
+            border-left: 4px solid var(--danger-red);
+        }
+
+        .form-help {
+            font-size: 0.75rem;
+            color: #6b7280;
+            margin-top: 0.25rem;
+        }
+
         .error-message {
             background: #fef2f2;
             border: 1px solid #fecaca;
@@ -354,6 +579,7 @@ Completely separate from transfer planning to maintain system stability.
                         <option value="24">Last 24 Months</option>
                         <option value="36">Last 36 Months</option>
                     </select>
+                    <div class="form-help">Longer periods provide more stable trends but may include outdated patterns.</div>
                 </div>
                 <div class="col-md-3">
                     <label for="warehouseFilter" class="form-label">Warehouse</label>
@@ -362,6 +588,7 @@ Completely separate from transfer planning to maintain system stability.
                         <option value="burnaby">Burnaby Only</option>
                         <option value="kentucky">Kentucky Only</option>
                     </select>
+                    <div class="form-help">Filter data by specific warehouse. "Both" shows combined metrics.</div>
                 </div>
                 <div class="col-md-3">
                     <label for="performanceMetric" class="form-label">Performance Metric</label>
@@ -370,6 +597,7 @@ Completely separate from transfer planning to maintain system stability.
                         <option value="units">Units Sold</option>
                         <option value="growth">Growth Rate</option>
                     </select>
+                    <div class="form-help">Choose ranking metric: Revenue (total sales), Units (quantity), Growth (% increase).</div>
                 </div>
                 <div class="col-md-3 d-flex align-items-end">
                     <button id="refreshBtn" class="btn btn-primary me-2">
@@ -393,6 +621,95 @@ Completely separate from transfer planning to maintain system stability.
                 </div>
             </div>
             <canvas id="revenueTrendsChart" style="max-height: 400px;"></canvas>
+        </div>
+
+        <!-- Seasonal Analysis Chart -->
+        <div class="chart-container">
+            <h3 class="chart-title">Seasonal Analysis</h3>
+            <div class="row mb-3">
+                <div class="col-md-6">
+                    <label for="seasonalSku" class="form-label">Select SKU for Seasonal Analysis</label>
+                    <select id="seasonalSku" class="form-select">
+                        <option value="">Overall Sales Pattern</option>
+                    </select>
+                </div>
+                <div class="col-md-3">
+                    <label for="seasonalPeriod" class="form-label">Analysis Period</label>
+                    <select id="seasonalPeriod" class="form-select">
+                        <option value="18">18 Months</option>
+                        <option value="24" selected>24 Months</option>
+                        <option value="36">36 Months</option>
+                    </select>
+                </div>
+                <div class="col-md-3 d-flex align-items-end">
+                    <button id="loadSeasonalBtn" class="btn btn-primary">
+                        <i class="fas fa-sync-alt me-1"></i>
+                        Analyze
+                    </button>
+                </div>
+            </div>
+            <div class="loading-spinner" id="seasonal-loading">
+                <div class="spinner-border text-primary" role="status">
+                    <span class="visually-hidden">Loading seasonal analysis...</span>
+                </div>
+            </div>
+            <canvas id="seasonalChart" style="max-height: 400px;"></canvas>
+
+            <div id="seasonal-insights" class="mt-3" style="display: none;">
+                <div class="alert alert-info">
+                    <h6><i class="fas fa-lightbulb me-2"></i>Seasonal Insights</h6>
+                    <div id="seasonal-insights-content"></div>
+                </div>
+            </div>
+
+            <!-- Business Insights Panel -->
+            <div id="seasonal-business-insights" class="card border-primary mt-3" style="display: none;">
+                <div class="card-header bg-primary text-white">
+                    <h5 class="mb-0"><i class="fas fa-chart-line me-2"></i>What This Means for Your Business</h5>
+                </div>
+                <div class="card-body">
+                    <div id="seasonal-recommendations" class="row">
+                        <!-- Recommendations will be populated here -->
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Stockout Impact Pareto Chart -->
+        <div class="chart-container">
+            <h3 class="chart-title">Stockout Impact Analysis (Pareto Chart)</h3>
+            <div class="row mb-3">
+                <div class="col-md-6">
+                    <label for="stockoutPeriod" class="form-label">Analysis Period</label>
+                    <select id="stockoutPeriod" class="form-select">
+                        <option value="6">Last 6 Months</option>
+                        <option value="12" selected>Last 12 Months</option>
+                        <option value="18">Last 18 Months</option>
+                    </select>
+                </div>
+                <div class="col-md-3">
+                    <label for="minStockoutImpact" class="form-label">Min Impact ($)</label>
+                    <input type="number" id="minStockoutImpact" class="form-control" placeholder="100" value="100" min="0" step="50">
+                </div>
+                <div class="col-md-3 d-flex align-items-end">
+                    <button id="loadStockoutBtn" class="btn btn-primary">
+                        <i class="fas fa-chart-bar me-1"></i>
+                        Analyze
+                    </button>
+                </div>
+            </div>
+            <div class="loading-spinner" id="stockout-loading">
+                <div class="spinner-border text-primary" role="status">
+                    <span class="visually-hidden">Loading stockout analysis...</span>
+                </div>
+            </div>
+            <canvas id="stockoutParetoChart" style="max-height: 450px;"></canvas>
+            <div id="stockout-insights" class="mt-3" style="display: none;">
+                <div class="alert alert-warning">
+                    <h6><i class="fas fa-exclamation-triangle me-2"></i>Stockout Impact Insights</h6>
+                    <div id="stockout-insights-content"></div>
+                </div>
+            </div>
         </div>
 
         <!-- Warehouse Comparison -->
@@ -496,6 +813,81 @@ Completely separate from transfer planning to maintain system stability.
         <div class="section-header">
             <h2 class="section-title">ABC-XYZ Classification Matrix</h2>
             <p class="section-subtitle">SKU distribution by revenue importance and demand volatility</p>
+            <button class="btn btn-sm btn-outline-info ms-2" data-bs-toggle="collapse" data-bs-target="#abcXyzEducation" aria-expanded="false">
+                <i class="fas fa-question-circle"></i> Learn More
+            </button>
+        </div>
+
+        <!-- Educational Content Panel -->
+        <div class="collapse mb-3" id="abcXyzEducation">
+            <div class="card border-info">
+                <div class="card-body">
+                    <h5 class="card-title text-info">Understanding ABC-XYZ Classification</h5>
+
+                    <div class="row">
+                        <div class="col-md-6">
+                            <h6 class="fw-bold text-primary">ABC Classification (Revenue Importance)</h6>
+                            <ul class="list-unstyled">
+                                <li><strong>A-Class (80% of Revenue):</strong> High-value items that generate most of your revenue. These require priority attention and tight inventory control.</li>
+                                <li><strong>B-Class (15% of Revenue):</strong> Medium-value items with moderate revenue contribution. Standard inventory management practices apply.</li>
+                                <li><strong>C-Class (5% of Revenue):</strong> Low-value items with minimal revenue impact. Can tolerate higher stockout risk to reduce carrying costs.</li>
+                            </ul>
+                        </div>
+
+                        <div class="col-md-6">
+                            <h6 class="fw-bold text-success">XYZ Classification (Demand Variability)</h6>
+                            <ul class="list-unstyled">
+                                <li><strong>X-Class (Stable):</strong> Predictable demand patterns, easy to forecast. Low safety stock requirements.</li>
+                                <li><strong>Y-Class (Moderate):</strong> Some demand fluctuation but manageable. Moderate safety stock and monitoring needed.</li>
+                                <li><strong>Z-Class (Volatile):</strong> Highly unpredictable demand. Requires higher safety stock and frequent review.</li>
+                            </ul>
+                        </div>
+                    </div>
+
+                    <div class="row mt-3">
+                        <div class="col-12">
+                            <h6 class="fw-bold text-warning">Strategic Recommendations by Category</h6>
+                            <div class="row">
+                                <div class="col-md-4">
+                                    <div class="bg-light p-2 rounded mb-2">
+                                        <strong>AX (High Value + Stable):</strong> Premium items with predictable demand. Implement just-in-time ordering with tight monitoring.
+                                    </div>
+                                    <div class="bg-light p-2 rounded mb-2">
+                                        <strong>AY (High Value + Moderate):</strong> Important items with some variability. Use statistical forecasting and maintain safety stock.
+                                    </div>
+                                    <div class="bg-light p-2 rounded mb-2">
+                                        <strong>AZ (High Value + Volatile):</strong> Critical but unpredictable. Requires close supplier relationships and buffer inventory.
+                                    </div>
+                                </div>
+
+                                <div class="col-md-4">
+                                    <div class="bg-light p-2 rounded mb-2">
+                                        <strong>BX (Medium Value + Stable):</strong> Reliable workhorses. Standard EOQ calculations and regular reviews work well.
+                                    </div>
+                                    <div class="bg-light p-2 rounded mb-2">
+                                        <strong>BY (Medium Value + Moderate):</strong> Average performers. Apply standard inventory management practices.
+                                    </div>
+                                    <div class="bg-light p-2 rounded mb-2">
+                                        <strong>BZ (Medium Value + Volatile):</strong> Requires some extra attention. Monitor trends and adjust safety stock as needed.
+                                    </div>
+                                </div>
+
+                                <div class="col-md-4">
+                                    <div class="bg-light p-2 rounded mb-2">
+                                        <strong>CX (Low Value + Stable):</strong> Low-priority items with predictable demand. Bulk ordering to minimize handling costs.
+                                    </div>
+                                    <div class="bg-light p-2 rounded mb-2">
+                                        <strong>CY (Low Value + Moderate):</strong> Basic items. Simple min/max systems usually sufficient.
+                                    </div>
+                                    <div class="bg-light p-2 rounded mb-2">
+                                        <strong>CZ (Low Value + Volatile):</strong> Consider discontinuation if margins are poor. Accept higher stockout risk.
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
         </div>
 
         <div class="chart-container">
@@ -619,19 +1011,62 @@ Completely separate from transfer planning to maintain system stability.
 
     <!-- Sales Dashboard JavaScript -->
     <script>
+        /**
+         * Sales Analytics Dashboard - Main Controller Class
+         *
+         * Manages all dashboard functionality including:
+         * - Data loading and API communication
+         * - Chart rendering and visualization
+         * - User interaction and event handling
+         * - Error handling and loading states
+         * - Tooltip management and user guidance
+         *
+         * This class integrates with multiple backend APIs to provide
+         * comprehensive sales analytics and insights.
+         */
         class SalesDashboard {
+            /**
+             * Initialize the Sales Dashboard with default settings
+             *
+             * Sets up all necessary instance variables:
+             * - Chart storage for Chart.js instances
+             * - DataTable references for table management
+             * - Loading state tracking
+             * - Filter state management
+             * - Error handling infrastructure
+             * - Connection monitoring
+             */
             constructor() {
+                // Chart.js instances storage
                 this.charts = {};
+
+                // DataTables instances
                 this.dataTable = null;
                 this.allSkusTable = null;
                 this.allSkusOffset = 0;
                 this.allSkusPagination = null;
+
+                // Loading state management
+                this.loadingTasks = new Set();
+
+                // Dashboard filter state
                 this.currentFilters = {
-                    monthsBack: 12,
-                    warehouse: null,
-                    metric: 'revenue'
+                    monthsBack: 12,      // Analysis period in months
+                    warehouse: null,     // Warehouse filter ('burnaby', 'kentucky', or null)
+                    metric: 'revenue'    // Performance ranking metric
                 };
 
+                // Analytics data caches
+                this.seasonalData = null;
+                this.selectedSku = null;
+                this.stockoutData = null;
+
+                // Error handling infrastructure
+                this.errorBoundaries = new Map();  // Maps context to retry functions
+                this.retryAttempts = new Map();     // Tracks retry counts per operation
+                this.connectionStatus = 'online';   // Network connectivity status
+
+                // Initialize the dashboard
                 this.init();
             }
 
@@ -664,8 +1099,19 @@ Completely separate from transfer planning to maintain system stability.
                 // All SKUs event handlers
                 this.setupAllSkusEventHandlers();
 
+                // Seasonal analysis event handlers
+                this.setupSeasonalEventHandlers();
+
+                // Stockout Pareto event handlers
+                this.setupStockoutEventHandlers();
+
                 // Auto-refresh every 5 minutes
                 setInterval(() => this.loadDashboard(), 5 * 60 * 1000);
+
+                // Initialize tooltips and error handling
+                this.initializeTooltips();
+                this.setupErrorHandling();
+                this.monitorConnection();
             }
 
             async loadDashboard() {
@@ -676,6 +1122,8 @@ Completely separate from transfer planning to maintain system stability.
                     await Promise.all([
                         this.loadSummary(),
                         this.loadRevenueTrends(),
+                        this.loadSeasonalOptions(),
+                        this.loadStockoutPareto(),
                         this.loadWarehouseComparison(),
                         this.loadTopPerformers(),
                         this.loadAbcXyzMatrix(),
@@ -693,79 +1141,147 @@ Completely separate from transfer planning to maintain system stability.
             }
 
             async loadSummary() {
-                const response = await fetch(`/api/sales/summary?months_back=${this.currentFilters.monthsBack}`);
-                const result = await response.json();
+                const context = 'Loading summary metrics';
+                this.showLoadingOverlay('kpi-container', 'Loading summary metrics...');
+                try {
+                    this.updateProgress('kpi-container', 50, 'Fetching sales data...');
+                    const response = await fetch(`/api/sales/summary?months_back=${this.currentFilters.monthsBack}`);
 
-                if (result.success) {
-                    const data = result.data;
-
-                    // Update KPI cards
-                    $('#total-revenue').text(this.formatCurrency(data.total_revenue));
-                    $('#avg-monthly').text(this.formatCurrency(data.average_monthly_revenue));
-                    $('#stockout-loss').text(this.formatCurrency(data.estimated_stockout_loss));
-                    $('#period-months').text(data.period_analyzed_months);
-
-                    // Update growth indicator
-                    const growth = data.monthly_growth_rate;
-                    const trendElement = $('#revenue-trend');
-                    if (growth > 0) {
-                        trendElement.html(`<i class="fas fa-arrow-up trend-positive"></i> +${growth.toFixed(1)}%`);
-                    } else if (growth < 0) {
-                        trendElement.html(`<i class="fas fa-arrow-down trend-negative"></i> ${growth.toFixed(1)}%`);
-                    } else {
-                        trendElement.html(`<i class="fas fa-minus text-muted"></i> 0%`);
+                    if (!response.ok) {
+                        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
                     }
+
+                    const result = await response.json();
+
+                    if (result.success) {
+                        const data = result.data;
+
+                        // Reset retry counter on success
+                        this.retryAttempts.delete(context);
+
+                        // Update KPI cards
+                        $('#total-revenue').text(this.formatCurrency(data.total_revenue));
+                        $('#avg-monthly').text(this.formatCurrency(data.average_monthly_revenue));
+                        $('#stockout-loss').text(this.formatCurrency(data.estimated_stockout_loss));
+                        $('#period-months').text(data.period_analyzed_months);
+
+                        // Update growth indicator
+                        const growth = data.monthly_growth_rate;
+                        const trendElement = $('#revenue-trend');
+                        if (growth > 0) {
+                            trendElement.html(`<i class="fas fa-arrow-up trend-positive"></i> +${growth.toFixed(1)}%`);
+                        } else if (growth < 0) {
+                            trendElement.html(`<i class="fas fa-arrow-down trend-negative"></i> ${growth.toFixed(1)}%`);
+                        } else {
+                            trendElement.html(`<i class="fas fa-minus text-muted"></i> 0%`);
+                        }
+                    } else {
+                        throw new Error(result.message || 'Failed to load summary data');
+                    }
+                } catch (error) {
+                    this.handleApiError(error, context, () => this.loadSummary());
+                } finally {
+                    this.hideLoadingOverlay('kpi-container');
                 }
             }
 
             async loadRevenueTrends() {
-                const response = await fetch(
-                    `/api/sales/revenue-trends?months_back=${this.currentFilters.monthsBack}${
-                        this.currentFilters.warehouse ? `&warehouse=${this.currentFilters.warehouse}` : ''
-                    }`
-                );
-                const result = await response.json();
+                const context = 'Loading revenue trends';
+                try {
+                    $('#trends-loading').show();
+                    const response = await fetch(
+                        `/api/sales/revenue-trends?months_back=${this.currentFilters.monthsBack}${
+                            this.currentFilters.warehouse ? `&warehouse=${this.currentFilters.warehouse}` : ''
+                        }`
+                    );
 
-                if (result.success && result.data.monthly_trends) {
-                    this.renderRevenueTrendsChart(result.data.monthly_trends);
+                    if (!response.ok) {
+                        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                    }
+
+                    const result = await response.json();
+
+                    if (result.success && result.data.monthly_trends) {
+                        this.retryAttempts.delete(context);
+                        this.renderRevenueTrendsChart(result.data.monthly_trends);
+                    } else {
+                        throw new Error(result.message || 'No trend data available');
+                    }
+                } catch (error) {
+                    this.handleApiError(error, context, () => this.loadRevenueTrends());
+                } finally {
+                    $('#trends-loading').hide();
                 }
             }
 
             async loadWarehouseComparison() {
-                const response = await fetch(`/api/sales/warehouse-comparison?months_back=${this.currentFilters.monthsBack}`);
-                const result = await response.json();
+                const context = 'Loading warehouse metrics';
+                this.showLoadingOverlay('warehouse-comparison', 'Loading warehouse metrics...');
+                try {
+                    this.updateProgress('warehouse-comparison', 50, 'Comparing warehouse data...');
+                    const response = await fetch(`/api/sales/warehouse-comparison?months_back=${this.currentFilters.monthsBack}`);
 
-                if (result.success) {
-                    const data = result.data;
-
-                    // Update Burnaby metrics
-                    if (data.burnaby) {
-                        $('#burnaby-revenue').text(this.formatCurrency(data.burnaby.revenue));
-                        $('#burnaby-units').text(this.formatNumber(data.burnaby.units));
-                        $('#burnaby-asp').text(this.formatCurrency(data.burnaby.avg_selling_price));
-                        $('#burnaby-skus').text(data.burnaby.sku_count);
-                        $('#burnaby-exclusive').text(data.burnaby.exclusive_skus);
+                    if (!response.ok) {
+                        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
                     }
 
-                    // Update Kentucky metrics
-                    if (data.kentucky) {
-                        $('#kentucky-revenue').text(this.formatCurrency(data.kentucky.revenue));
-                        $('#kentucky-units').text(this.formatNumber(data.kentucky.units));
-                        $('#kentucky-asp').text(this.formatCurrency(data.kentucky.avg_selling_price));
-                        $('#kentucky-skus').text(data.kentucky.sku_count);
-                        $('#kentucky-exclusive').text(data.kentucky.exclusive_skus);
+                    const result = await response.json();
+
+                    if (result.success) {
+                        this.retryAttempts.delete(context);
+                        const data = result.data;
+
+                        // Update Burnaby metrics
+                        if (data.burnaby) {
+                            $('#burnaby-revenue').text(this.formatCurrency(data.burnaby.revenue));
+                            $('#burnaby-units').text(this.formatNumber(data.burnaby.units));
+                            $('#burnaby-asp').text(this.formatCurrency(data.burnaby.avg_selling_price));
+                            $('#burnaby-skus').text(data.burnaby.sku_count);
+                            $('#burnaby-exclusive').text(data.burnaby.exclusive_skus);
+                        }
+
+                        // Update Kentucky metrics
+                        if (data.kentucky) {
+                            $('#kentucky-revenue').text(this.formatCurrency(data.kentucky.revenue));
+                            $('#kentucky-units').text(this.formatNumber(data.kentucky.units));
+                            $('#kentucky-asp').text(this.formatCurrency(data.kentucky.avg_selling_price));
+                            $('#kentucky-skus').text(data.kentucky.sku_count);
+                            $('#kentucky-exclusive').text(data.kentucky.exclusive_skus);
+                        }
+                    } else {
+                        throw new Error(result.message || 'Failed to load warehouse comparison data');
                     }
+                } catch (error) {
+                    this.handleApiError(error, context, () => this.loadWarehouseComparison());
+                } finally {
+                    this.hideLoadingOverlay('warehouse-comparison');
                 }
             }
 
             async loadTopPerformers() {
-                const response = await fetch(
-                    `/api/sales/top-performers?limit=50&metric=${this.currentFilters.metric}&period_months=${this.currentFilters.monthsBack}`
-                );
-                const result = await response.json();
+                const context = 'Loading top performers';
+                try {
+                    $('#performers-loading').show();
+                    const response = await fetch(
+                        `/api/sales/top-performers?limit=50&metric=${this.currentFilters.metric}&period_months=${this.currentFilters.monthsBack}`
+                    );
 
-                if (result.success) {
-                    this.renderPerformersTable(result.data);
+                    if (!response.ok) {
+                        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                    }
+
+                    const result = await response.json();
+
+                    if (result.success) {
+                        this.retryAttempts.delete(context);
+                        this.renderPerformersTable(result.data);
+                    } else {
+                        throw new Error(result.message || 'No performer data available');
+                    }
+                } catch (error) {
+                    this.handleApiError(error, context, () => this.loadTopPerformers());
+                } finally {
+                    $('#performers-loading').hide();
                 }
             }
 
@@ -778,9 +1294,19 @@ Completely separate from transfer planning to maintain system stability.
                 }
             }
 
+            /**
+             * Render the revenue trends chart using Chart.js
+             *
+             * Creates a combination bar/line chart showing:
+             * - Monthly revenue as bars (left Y-axis)
+             * - Units sold as line (right Y-axis)
+             *
+             * @param {Array} data - Array of monthly trend objects with revenue and units
+             */
             renderRevenueTrendsChart(data) {
                 const ctx = document.getElementById('revenueTrendsChart');
 
+                // Clean up existing chart instance
                 if (this.charts.revenue) {
                     this.charts.revenue.destroy();
                 }
@@ -955,7 +1481,14 @@ Completely separate from transfer planning to maintain system stability.
                                 callbacks: {
                                     afterLabel: (context) => {
                                         const index = context.dataIndex;
-                                        return `SKUs: ${skuCounts[index]}`;
+                                        const label = labels[index];
+                                        const recommendations = this.getABCXYZRecommendations(label);
+                                        return [
+                                            `SKUs: ${skuCounts[index]}`,
+                                            '',
+                                            'Strategy:',
+                                            ...recommendations
+                                        ];
                                     }
                                 }
                             }
@@ -1095,6 +1628,576 @@ Completely separate from transfer planning to maintain system stability.
                 });
             }
 
+            setupSeasonalEventHandlers() {
+                $('#loadSeasonalBtn').on('click', () => {
+                    this.loadSeasonalAnalysis();
+                });
+
+                $('#seasonalSku').on('change', (e) => {
+                    this.selectedSku = e.target.value || null;
+                });
+            }
+
+            async loadSeasonalOptions() {
+                try {
+                    // Get all active SKUs for seasonal analysis dropdown
+                    const response = await fetch('/api/sales/active-skus');
+                    const result = await response.json();
+
+                    if (result.success && result.data) {
+                        const select = $('#seasonalSku');
+                        select.empty().append('<option value="">Overall Sales Pattern</option>');
+
+                        // Show all active SKUs (950) instead of just top 20
+                        result.data.forEach(sku => {
+                            select.append(`<option value="${sku.sku_id}">${sku.sku_id} - ${sku.description}</option>`);
+                        });
+
+                        console.log(`Loaded ${result.data.length} active SKUs for seasonal analysis`);
+                    }
+                } catch (error) {
+                    console.error('Error loading seasonal options:', error);
+                }
+            }
+
+            async loadSeasonalAnalysis() {
+                try {
+                    $('#seasonal-loading').show();
+                    $('#seasonal-insights').hide();
+
+                    const monthsBack = $('#seasonalPeriod').val() || 24;
+                    const skuId = this.selectedSku;
+
+                    let url = `/api/sales/seasonal-analysis?months_back=${monthsBack}&min_months_required=18`;
+                    if (skuId) {
+                        url += `&sku_id=${encodeURIComponent(skuId)}`;
+                    }
+                    if (this.currentFilters.warehouse) {
+                        url += `&warehouse=${this.currentFilters.warehouse}`;
+                    }
+
+                    const response = await fetch(url);
+                    const result = await response.json();
+
+                    if (result.success && result.data && result.data.length > 0) {
+                        const seasonalData = result.data[0]; // Get first item from array
+                        this.renderSeasonalChart(seasonalData);
+                        this.showSeasonalInsights(seasonalData);
+                    } else {
+                        this.showError('Failed to load seasonal analysis: ' + (result.message || 'Unknown error'));
+                    }
+                } catch (error) {
+                    console.error('Error loading seasonal analysis:', error);
+                    this.showError('Failed to load seasonal analysis');
+                } finally {
+                    $('#seasonal-loading').hide();
+                }
+            }
+
+            /**
+             * Render seasonal analysis chart with confidence bands
+             *
+             * Displays seasonal factors by month with:
+             * - Main line showing seasonal multipliers (1.0 = average)
+             * - Confidence bands showing statistical uncertainty
+             * - Peak/low season identification
+             *
+             * @param {Object} data - Seasonal analysis data including factors and confidence
+             */
+            renderSeasonalChart(data) {
+                const ctx = document.getElementById('seasonalChart');
+
+                // Clean up existing chart instance
+                if (this.charts.seasonal) {
+                    this.charts.seasonal.destroy();
+                }
+
+                if (!data.has_seasonal_pattern || !data.seasonal_factors) {
+                    // Show message for no seasonal pattern
+                    ctx.getContext('2d').clearRect(0, 0, ctx.width, ctx.height);
+                    const context = ctx.getContext('2d');
+                    context.font = '16px Arial';
+                    context.textAlign = 'center';
+                    context.fillText('No significant seasonal pattern detected', ctx.width / 2, ctx.height / 2);
+                    return;
+                }
+
+                // Prepare data for seasonal factors chart
+                const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+                const factors = new Array(12).fill(1.0);
+                const confidenceBands = {
+                    upper: new Array(12).fill(1.0),
+                    lower: new Array(12).fill(1.0)
+                };
+
+                // Map seasonal factors to months (seasonal_factors is an object with month keys)
+                Object.entries(data.seasonal_factors).forEach(([month, factor]) => {
+                    const monthIndex = parseInt(month) - 1; // Convert 1-12 to 0-11
+                    if (monthIndex >= 0 && monthIndex < 12) {
+                        factors[monthIndex] = factor;
+                        // Get confidence from factor_confidence if available
+                        const confidence = data.factor_confidence ? data.factor_confidence[month] : factor;
+                        confidenceBands.upper[monthIndex] = confidence * 1.1; // 10% confidence band
+                        confidenceBands.lower[monthIndex] = confidence * 0.9;
+                    }
+                });
+
+                this.charts.seasonal = new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels: months,
+                        datasets: [{
+                            label: 'Seasonal Factor',
+                            data: factors,
+                            borderColor: 'rgb(37, 99, 235)',
+                            backgroundColor: 'rgba(37, 99, 235, 0.1)',
+                            borderWidth: 3,
+                            fill: false,
+                            tension: 0.4,
+                            pointRadius: 6,
+                            pointHoverRadius: 8
+                        }, {
+                            label: 'Confidence Band (Upper)',
+                            data: confidenceBands.upper,
+                            borderColor: 'rgba(37, 99, 235, 0.3)',
+                            backgroundColor: 'transparent',
+                            borderWidth: 1,
+                            borderDash: [5, 5],
+                            fill: false,
+                            pointRadius: 0
+                        }, {
+                            label: 'Confidence Band (Lower)',
+                            data: confidenceBands.lower,
+                            borderColor: 'rgba(37, 99, 235, 0.3)',
+                            backgroundColor: 'rgba(37, 99, 235, 0.1)',
+                            borderWidth: 1,
+                            borderDash: [5, 5],
+                            fill: '-1', // Fill to previous dataset
+                            pointRadius: 0
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        interaction: {
+                            mode: 'index',
+                            intersect: false
+                        },
+                        scales: {
+                            x: {
+                                title: {
+                                    display: true,
+                                    text: 'Month'
+                                }
+                            },
+                            y: {
+                                title: {
+                                    display: true,
+                                    text: 'Seasonal Factor (1.0 = Average)'
+                                },
+                                beginAtZero: false,
+                                ticks: {
+                                    callback: (value) => value.toFixed(2)
+                                }
+                            }
+                        },
+                        plugins: {
+                            title: {
+                                display: true,
+                                text: data.sku_id ? `Seasonal Pattern: ${data.sku_id}` : 'Overall Seasonal Pattern'
+                            },
+                            tooltip: {
+                                callbacks: {
+                                    label: (context) => {
+                                        const factor = context.parsed.y;
+                                        const percentage = ((factor - 1) * 100).toFixed(1);
+                                        return `${context.dataset.label}: ${factor.toFixed(3)} (${percentage > 0 ? '+' : ''}${percentage}%)`;
+                                    }
+                                }
+                            },
+                            legend: {
+                                display: true,
+                                labels: {
+                                    filter: (legendItem) => legendItem.text === 'Seasonal Factor' // Only show main line in legend
+                                }
+                            }
+                        }
+                    }
+                });
+            }
+
+            showSeasonalInsights(data) {
+                const insights = [];
+
+                if (data.has_seasonal_pattern) {
+                    const confidenceLevel = data.statistical_significance?.confidence_level || data.pattern_strength || 0;
+                    insights.push(`<strong>Seasonal Pattern Detected:</strong> Statistical significance level ${(confidenceLevel * 100).toFixed(1)}%`);
+
+                    if (data.peak_months && data.peak_months.length > 0) {
+                        const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+                        const peakNames = data.peak_months.map(m => monthNames[m - 1]).join(', ');
+                        insights.push(`<strong>Peak Season:</strong> ${peakNames}`);
+                    }
+
+                    if (data.low_months && data.low_months.length > 0) {
+                        const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+                        const lowNames = data.low_months.map(m => monthNames[m - 1]).join(', ');
+                        insights.push(`<strong>Low Season:</strong> ${lowNames}`);
+                    }
+
+                    if (data.seasonal_strength !== undefined) {
+                        insights.push(`<strong>Seasonal Strength:</strong> ${(data.seasonal_strength * 100).toFixed(1)}% variation from average`);
+                    }
+
+                    if (data.business_insights && data.business_insights.length > 0) {
+                        insights.push('<strong>Recommendations:</strong>');
+                        data.business_insights.forEach(insight => {
+                            insights.push(`• ${insight}`);
+                        });
+                    }
+                } else {
+                    insights.push('<strong>No Significant Seasonal Pattern:</strong> Sales are relatively stable throughout the year.');
+                    insights.push('• Consider consistent inventory levels across all months');
+                    insights.push('• Focus on other demand drivers like promotions or trends');
+                }
+
+                if (insights.length > 0) {
+                    $('#seasonal-insights-content').html(insights.join('<br>'));
+                    $('#seasonal-insights').show();
+
+                    // Show business insights panel with actionable recommendations
+                    this.showSeasonalBusinessInsights(data);
+                } else {
+                    $('#seasonal-business-insights').hide();
+                }
+            }
+
+            /**
+             * Display business insights and recommendations for seasonal patterns
+             *
+             * @param {Object} data - Seasonal analysis data
+             */
+            showSeasonalBusinessInsights(data) {
+                const recommendations = [];
+
+                if (data.has_seasonal_pattern) {
+                    // Peak season recommendations
+                    if (data.peak_months && data.peak_months.length > 0) {
+                        const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+                        const peakNames = data.peak_months.map(m => monthNames[m - 1]).join(', ');
+
+                        recommendations.push({
+                            type: 'success',
+                            title: 'Pre-Peak Inventory Planning',
+                            icon: 'fas fa-chart-line',
+                            text: `Build inventory 1-2 months before peak season (${peakNames}). Consider increasing safety stock levels by 20-40% to handle demand spikes.`
+                        });
+                    }
+
+                    // Low season recommendations
+                    if (data.low_months && data.low_months.length > 0) {
+                        const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+                        const lowNames = data.low_months.map(m => monthNames[m - 1]).join(', ');
+
+                        recommendations.push({
+                            type: 'warning',
+                            title: 'Low Season Strategy',
+                            icon: 'fas fa-calendar-times',
+                            text: `Reduce inventory levels during ${lowNames}. Consider promotions or liquidation of excess stock. Plan maintenance activities during this period.`
+                        });
+                    }
+
+                    // Seasonal strength insights
+                    if (data.seasonal_strength > 0.3) {
+                        recommendations.push({
+                            type: 'info',
+                            title: 'High Seasonality Impact',
+                            icon: 'fas fa-exclamation-triangle',
+                            text: 'Strong seasonal patterns detected. Implement seasonal forecasting models and adjust reorder points monthly to optimize inventory turns.'
+                        });
+                    }
+
+                    recommendations.push({
+                        type: 'primary',
+                        title: 'Forecasting Recommendation',
+                        icon: 'fas fa-crystal-ball',
+                        text: 'Use these seasonal factors to multiply your base demand forecasts. Update safety stock calculations to account for seasonal variability.'
+                    });
+
+                } else {
+                    recommendations.push({
+                        type: 'info',
+                        title: 'Stable Demand Pattern',
+                        icon: 'fas fa-equals',
+                        text: 'No significant seasonal patterns detected. Maintain consistent inventory levels and focus on other demand drivers like trends or promotions.'
+                    });
+                }
+
+                // Render recommendations
+                let html = '';
+                recommendations.forEach(rec => {
+                    html += `
+                        <div class="col-md-6 mb-3">
+                            <div class="alert alert-${rec.type} border-${rec.type}">
+                                <h6 class="alert-heading"><i class="${rec.icon} me-2"></i>${rec.title}</h6>
+                                <p class="mb-0 small">${rec.text}</p>
+                            </div>
+                        </div>
+                    `;
+                });
+
+                $('#seasonal-recommendations').html(html);
+                $('#seasonal-business-insights').show();
+            }
+
+            setupStockoutEventHandlers() {
+                $('#loadStockoutBtn').on('click', () => {
+                    this.loadStockoutPareto();
+                });
+            }
+
+            async loadStockoutPareto() {
+                try {
+                    $('#stockout-loading').show();
+                    $('#stockout-insights').hide();
+
+                    const monthsBack = $('#stockoutPeriod').val() || 12;
+                    const minImpact = parseFloat($('#minStockoutImpact').val()) || 100;
+
+                    let url = `/api/sales/stockout-impact?months_back=${monthsBack}&min_impact=${minImpact}`;
+                    if (this.currentFilters.warehouse) {
+                        url += `&warehouse=${this.currentFilters.warehouse}`;
+                    }
+
+                    const response = await fetch(url);
+                    const result = await response.json();
+
+                    if (result.success && result.data) {
+                        this.renderStockoutParetoChart(result.data);
+                        this.showStockoutInsights(result.data);
+                    } else {
+                        this.showError('Failed to load stockout analysis: ' + (result.message || 'Unknown error'));
+                    }
+                } catch (error) {
+                    console.error('Error loading stockout analysis:', error);
+                    this.showError('Failed to load stockout analysis');
+                } finally {
+                    $('#stockout-loading').hide();
+                }
+            }
+
+            /**
+             * Render stockout impact Pareto chart (80/20 analysis)
+             *
+             * Shows which SKUs contribute most to revenue losses:
+             * - Individual SKU losses as red bars (left Y-axis)
+             * - Cumulative percentage as orange line (right Y-axis)
+             * - Identifies the vital few SKUs causing most impact
+             *
+             * @param {Object} data - Stockout analysis data with affected SKUs and totals
+             */
+            renderStockoutParetoChart(data) {
+                const ctx = document.getElementById('stockoutParetoChart');
+
+                // Clean up existing chart instance
+                if (this.charts.stockout) {
+                    this.charts.stockout.destroy();
+                }
+
+                if (!data.affected_skus || data.affected_skus.length === 0) {
+                    // Show message for no stockout data
+                    const context = ctx.getContext('2d');
+                    context.clearRect(0, 0, ctx.width, ctx.height);
+                    context.font = '16px Arial';
+                    context.textAlign = 'center';
+                    context.fillText('No significant stockout impact found in the selected period', ctx.width / 2, ctx.height / 2);
+                    return;
+                }
+
+                // Sort SKUs by estimated lost revenue (descending)
+                const sortedSkus = [...data.affected_skus].sort((a, b) => (b.estimated_lost_revenue || 0) - (a.estimated_lost_revenue || 0));
+
+                // Take top 20 for readability
+                const topSkus = sortedSkus.slice(0, 20);
+
+                // Calculate cumulative percentages for Pareto analysis
+                const totalLoss = data.total_estimated_loss || topSkus.reduce((sum, sku) => sum + (sku.estimated_lost_revenue || 0), 0);
+                let cumulativeLoss = 0;
+                const paretoData = topSkus.map(sku => {
+                    cumulativeLoss += (sku.estimated_lost_revenue || 0);
+                    return {
+                        sku_id: sku.sku_id,
+                        loss: sku.estimated_lost_revenue || 0,
+                        cumulative_percentage: (cumulativeLoss / totalLoss) * 100
+                    };
+                });
+
+                const labels = paretoData.map(item => item.sku_id);
+                const lossAmounts = paretoData.map(item => item.loss);
+                const cumulativePercentages = paretoData.map(item => item.cumulative_percentage);
+
+                this.charts.stockout = new Chart(ctx, {
+                    type: 'bar',
+                    data: {
+                        labels: labels,
+                        datasets: [{
+                            label: 'Estimated Lost Revenue',
+                            data: lossAmounts,
+                            backgroundColor: 'rgba(220, 38, 38, 0.7)',
+                            borderColor: 'rgb(220, 38, 38)',
+                            borderWidth: 1,
+                            yAxisID: 'y'
+                        }, {
+                            label: 'Cumulative %',
+                            data: cumulativePercentages,
+                            type: 'line',
+                            borderColor: 'rgb(217, 119, 6)',
+                            backgroundColor: 'rgba(217, 119, 6, 0.1)',
+                            borderWidth: 3,
+                            fill: false,
+                            tension: 0.1,
+                            pointRadius: 5,
+                            pointHoverRadius: 7,
+                            yAxisID: 'y1'
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        interaction: {
+                            mode: 'index',
+                            intersect: false
+                        },
+                        scales: {
+                            x: {
+                                title: {
+                                    display: true,
+                                    text: 'SKU (Top 20 by Lost Revenue)'
+                                },
+                                ticks: {
+                                    maxRotation: 45,
+                                    minRotation: 45
+                                }
+                            },
+                            y: {
+                                type: 'linear',
+                                display: true,
+                                position: 'left',
+                                title: {
+                                    display: true,
+                                    text: 'Estimated Lost Revenue ($)'
+                                },
+                                ticks: {
+                                    callback: value => this.formatCurrency(value)
+                                }
+                            },
+                            y1: {
+                                type: 'linear',
+                                display: true,
+                                position: 'right',
+                                title: {
+                                    display: true,
+                                    text: 'Cumulative Percentage (%)'
+                                },
+                                min: 0,
+                                max: 100,
+                                grid: {
+                                    drawOnChartArea: false
+                                },
+                                ticks: {
+                                    callback: value => value.toFixed(1) + '%'
+                                }
+                            }
+                        },
+                        plugins: {
+                            title: {
+                                display: true,
+                                text: 'Stockout Impact Pareto Analysis (80/20 Rule)'
+                            },
+                            tooltip: {
+                                callbacks: {
+                                    label: (context) => {
+                                        if (context.dataset.label === 'Estimated Lost Revenue') {
+                                            return `Lost Revenue: ${this.formatCurrency(context.raw)}`;
+                                        } else {
+                                            return `Cumulative: ${context.raw.toFixed(1)}%`;
+                                        }
+                                    }
+                                }
+                            },
+                            legend: {
+                                display: true
+                            }
+                        }
+                    }
+                });
+
+                // Add 80% line annotation if available
+                if (cumulativePercentages.length > 0) {
+                    const eightyPercentIndex = cumulativePercentages.findIndex(p => p >= 80);
+                    if (eightyPercentIndex >= 0) {
+                        console.log(`80% of stockout impact comes from top ${eightyPercentIndex + 1} SKUs`);
+                    }
+                }
+            }
+
+            showStockoutInsights(data) {
+                const insights = [];
+
+                if (data.total_estimated_loss && data.total_estimated_loss > 0) {
+                    insights.push(`<strong>Total Estimated Loss:</strong> ${this.formatCurrency(data.total_estimated_loss)} over ${data.period_months} months`);
+
+                    if (data.affected_skus && data.affected_skus.length > 0) {
+                        insights.push(`<strong>Affected SKUs:</strong> ${data.affected_skus.length} SKUs with stockout impact`);
+
+                        // Calculate 80/20 insights
+                        const sortedSkus = [...data.affected_skus].sort((a, b) => (b.estimated_lost_revenue || 0) - (a.estimated_lost_revenue || 0));
+                        const totalLoss = data.total_estimated_loss;
+                        let cumulativeLoss = 0;
+                        let eightyPercentCount = 0;
+
+                        for (let i = 0; i < sortedSkus.length; i++) {
+                            cumulativeLoss += (sortedSkus[i].estimated_lost_revenue || 0);
+                            if (cumulativeLoss / totalLoss >= 0.8) {
+                                eightyPercentCount = i + 1;
+                                break;
+                            }
+                        }
+
+                        if (eightyPercentCount > 0) {
+                            const percentage = ((eightyPercentCount / data.affected_skus.length) * 100).toFixed(1);
+                            insights.push(`<strong>Pareto Insight:</strong> Top ${eightyPercentCount} SKUs (${percentage}%) account for 80% of stockout losses`);
+                        }
+
+                        // Top worst performers
+                        const topWorst = sortedSkus.slice(0, 3);
+                        const worstList = topWorst.map(sku =>
+                            `${sku.sku_id} (${this.formatCurrency(sku.estimated_lost_revenue || 0)})`
+                        ).join(', ');
+                        insights.push(`<strong>Worst Performers:</strong> ${worstList}`);
+                    }
+
+                    if (data.business_insights && data.business_insights.length > 0) {
+                        insights.push('<strong>Recommendations:</strong>');
+                        data.business_insights.forEach(insight => {
+                            insights.push(`• ${insight}`);
+                        });
+                    } else {
+                        insights.push('<strong>Recommendations:</strong>');
+                        insights.push('• Focus inventory management on the top-impact SKUs first');
+                        insights.push('• Review safety stock levels for frequently stocked-out items');
+                        insights.push('• Consider supplier lead time improvements for high-impact SKUs');
+                    }
+                } else {
+                    insights.push('<strong>Good News:</strong> No significant stockout impact detected in the selected period.');
+                    insights.push('• Current inventory management appears to be effective');
+                    insights.push('• Continue monitoring for seasonal or demand spikes');
+                }
+
+                if (insights.length > 0) {
+                    $('#stockout-insights-content').html(insights.join('<br>'));
+                    $('#stockout-insights').show();
+                }
+            }
+
             formatPercentage(value) {
                 if (!value) return '0%';
                 const formatted = Math.round(value * 100) / 100;
@@ -1123,6 +2226,12 @@ Completely separate from transfer planning to maintain system stability.
                 }
             }
 
+            /**
+             * Format numeric values as US currency
+             *
+             * @param {number} value - Numeric value to format
+             * @returns {string} Formatted currency string (e.g., '$1,234')
+             */
             formatCurrency(value) {
                 if (!value) return '$0';
                 return new Intl.NumberFormat('en-US', {
@@ -1133,9 +2242,85 @@ Completely separate from transfer planning to maintain system stability.
                 }).format(value);
             }
 
+            /**
+             * Format numeric values with thousands separators
+             *
+             * @param {number} value - Numeric value to format
+             * @returns {string} Formatted number string (e.g., '1,234')
+             */
             formatNumber(value) {
                 if (!value) return '0';
                 return new Intl.NumberFormat('en-US').format(value);
+            }
+
+            /**
+             * Get strategic recommendations for ABC-XYZ classification combinations
+             *
+             * @param {string} classification - ABC-XYZ classification (e.g., 'AX', 'BY', 'CZ')
+             * @returns {array} Array of recommendation strings for tooltip display
+             */
+            getABCXYZRecommendations(classification) {
+                const recommendations = {
+                    'AX': [
+                        '• Premium items with predictable demand',
+                        '• Implement just-in-time ordering',
+                        '• Tight monitoring and forecasting',
+                        '• High service level targets (98-99%)'
+                    ],
+                    'AY': [
+                        '• Important items with moderate variability',
+                        '• Use statistical forecasting models',
+                        '• Maintain appropriate safety stock',
+                        '• Service level targets (95-98%)'
+                    ],
+                    'AZ': [
+                        '• Critical but unpredictable items',
+                        '• Close supplier relationships essential',
+                        '• Higher buffer inventory required',
+                        '• Frequent demand review needed'
+                    ],
+                    'BX': [
+                        '• Reliable workhorses with stable demand',
+                        '• Standard EOQ calculations apply',
+                        '• Regular periodic reviews sufficient',
+                        '• Service level targets (90-95%)'
+                    ],
+                    'BY': [
+                        '• Average performers, standard treatment',
+                        '• Apply standard inventory practices',
+                        '• Monitor for trend changes',
+                        '• Service level targets (85-92%)'
+                    ],
+                    'BZ': [
+                        '• Requires extra attention despite medium value',
+                        '• Monitor trends and adjust safety stock',
+                        '• Consider demand pattern analysis',
+                        '• Flexible service levels (80-90%)'
+                    ],
+                    'CX': [
+                        '• Low-priority items with predictable demand',
+                        '• Bulk ordering to minimize handling costs',
+                        '• Accept longer lead times',
+                        '• Service level targets (75-85%)'
+                    ],
+                    'CY': [
+                        '• Basic items with moderate demand variation',
+                        '• Simple min/max systems usually sufficient',
+                        '• Periodic bulk replenishment',
+                        '• Service level targets (70-80%)'
+                    ],
+                    'CZ': [
+                        '• Consider discontinuation if margins poor',
+                        '• Accept higher stockout risk',
+                        '• Minimal inventory investment',
+                        '• Service level targets (60-75%)'
+                    ]
+                };
+
+                return recommendations[classification] || [
+                    '• Classification not recognized',
+                    '• Review ABC-XYZ analysis settings'
+                ];
             }
 
             updateLastUpdated() {
@@ -1151,6 +2336,294 @@ Completely separate from transfer planning to maintain system stability.
                 $('.loading-spinner').hide();
             }
 
+            showLoadingOverlay(containerId, task = 'Loading data...') {
+                const container = $(`#${containerId}`);
+                if (container.length === 0) return;
+
+                // Remove existing overlay
+                container.find('.loading-overlay').remove();
+
+                const overlay = $(`
+                    <div class="loading-overlay d-flex">
+                        <div class="progress-container">
+                            <div class="progress-spinner">
+                                <div class="spinner-border text-primary" role="status">
+                                    <span class="visually-hidden">Loading...</span>
+                                </div>
+                            </div>
+                            <div class="progress-text">${task}</div>
+                            <div class="progress-bar-custom">
+                                <div class="progress-fill"></div>
+                            </div>
+                        </div>
+                    </div>
+                `);
+
+                container.append(overlay);
+                overlay.show();
+
+                // Animate progress bar
+                setTimeout(() => {
+                    overlay.find('.progress-fill').css('width', '30%');
+                }, 100);
+
+                this.loadingTasks.add(containerId);
+            }
+
+            hideLoadingOverlay(containerId) {
+                const container = $(`#${containerId}`);
+                if (container.length === 0) return;
+
+                const overlay = container.find('.loading-overlay');
+                if (overlay.length > 0) {
+                    // Complete progress bar before hiding
+                    overlay.find('.progress-fill').css('width', '100%');
+                    setTimeout(() => {
+                        overlay.fadeOut(300, () => overlay.remove());
+                    }, 200);
+                }
+
+                this.loadingTasks.delete(containerId);
+            }
+
+            updateProgress(containerId, percentage, task) {
+                const container = $(`#${containerId}`);
+                const overlay = container.find('.loading-overlay');
+                if (overlay.length > 0) {
+                    overlay.find('.progress-fill').css('width', `${Math.max(30, percentage)}%`);
+                    if (task) {
+                        overlay.find('.progress-text').text(task);
+                    }
+                }
+            }
+
+            showSkeletonLoader(containerId) {
+                const container = $(`#${containerId}`);
+                if (container.length === 0) return;
+
+                const skeleton = $(`
+                    <div class="skeleton-card">
+                        <div class="loading-skeleton skeleton-line medium"></div>
+                        <div class="loading-skeleton skeleton-line long"></div>
+                        <div class="loading-skeleton skeleton-line short"></div>
+                        <div class="loading-skeleton skeleton-line long"></div>
+                        <div class="loading-skeleton skeleton-line medium"></div>
+                    </div>
+                `);
+
+                container.html(skeleton);
+            }
+
+            initializeTooltips() {
+                // Add tooltips to various elements
+                this.addTooltip('#total-revenue', 'Total revenue across all SKUs and warehouses for the selected period');
+                this.addTooltip('#avg-monthly', 'Average monthly revenue calculated from the selected analysis period');
+                this.addTooltip('#stockout-loss', 'Estimated revenue lost due to stockouts, calculated using demand correction factors');
+                this.addTooltip('#period-months', 'Number of months included in the current analysis');
+
+                // Filter tooltips
+                this.addTooltip('label[for="monthsBack"]', 'Select the time period for analysis. Longer periods provide more stable trends but may include outdated patterns.');
+                this.addTooltip('label[for="warehouseFilter"]', 'Filter data by specific warehouse. "Both" shows combined metrics across all locations.');
+                this.addTooltip('label[for="performanceMetric"]', 'Choose the metric for ranking top performers: Revenue (total sales), Units (quantity sold), or Growth (percentage increase).');
+
+                // Seasonal analysis tooltips
+                this.addTooltip('label[for="seasonalSku"]', 'Select a specific SKU for detailed seasonal analysis, or choose "Overall" for aggregate patterns.');
+                this.addTooltip('label[for="seasonalPeriod"]', 'Minimum 18 months of data required for reliable seasonal pattern detection.');
+
+                // Stockout analysis tooltips
+                this.addTooltip('label[for="stockoutPeriod"]', 'Time period for stockout impact analysis. Longer periods show more comprehensive patterns.');
+                this.addTooltip('label[for="minStockoutImpact"]', 'Minimum dollar amount of estimated lost revenue to include SKUs in the analysis.');
+
+                // Classification tooltips
+                this.addTooltip('.abc-badge-A', 'Class A: High-value items contributing to top 80% of revenue', 'mouseenter');
+                this.addTooltip('.abc-badge-B', 'Class B: Medium-value items contributing to next 15% of revenue', 'mouseenter');
+                this.addTooltip('.abc-badge-C', 'Class C: Low-value items contributing to bottom 5% of revenue', 'mouseenter');
+                this.addTooltip('.xyz-badge-X', 'Class X: Stable demand with low variability (CV < 0.5)', 'mouseenter');
+                this.addTooltip('.xyz-badge-Y', 'Class Y: Variable demand with moderate predictability (CV 0.5-1.0)', 'mouseenter');
+                this.addTooltip('.xyz-badge-Z', 'Class Z: Erratic demand with high variability (CV > 1.0)', 'mouseenter');
+            }
+
+            addTooltip(selector, text, trigger = 'hover') {
+                const elements = $(selector);
+                if (elements.length === 0) return;
+
+                elements.each(function() {
+                    const $element = $(this);
+                    if ($element.data('tooltip-added')) return;
+
+                    // Add tooltip icon if not already present
+                    if (!$element.find('.tooltip-icon').length && !$element.hasClass('badge')) {
+                        $element.append('<span class="tooltip-icon">?</span>');
+                    }
+
+                    const tooltip = $(`<div class="custom-tooltip">${text}</div>`);
+                    $('body').append(tooltip);
+
+                    const showTooltip = (e) => {
+                        const rect = e.currentTarget.getBoundingClientRect();
+                        tooltip.css({
+                            left: rect.left + rect.width / 2,
+                            top: rect.top - 35
+                        }).addClass('show');
+                    };
+
+                    const hideTooltip = () => {
+                        tooltip.removeClass('show');
+                    };
+
+                    if (trigger === 'hover') {
+                        $element.on('mouseenter', showTooltip);
+                        $element.on('mouseleave', hideTooltip);
+                    } else if (trigger === 'mouseenter') {
+                        $element.on('mouseenter', showTooltip);
+                        $element.on('mouseleave', hideTooltip);
+                    }
+
+                    $element.data('tooltip-added', true);
+                });
+            }
+
+            setupErrorHandling() {
+                // Global error handler for unhandled promise rejections
+                window.addEventListener('unhandledrejection', (event) => {
+                    console.error('Unhandled promise rejection:', event.reason);
+                    this.showError('An unexpected error occurred. Please try refreshing the page.');
+                });
+
+                // Network error detection
+                window.addEventListener('offline', () => {
+                    this.connectionStatus = 'offline';
+                    this.showConnectionStatus('You are currently offline. Data may not be up to date.', 'offline');
+                });
+
+                window.addEventListener('online', () => {
+                    this.connectionStatus = 'online';
+                    this.showConnectionStatus('Connection restored. Refreshing data...', 'online');
+                    setTimeout(() => {
+                        this.loadDashboard();
+                        this.hideConnectionStatus();
+                    }, 2000);
+                });
+            }
+
+            monitorConnection() {
+                // Connection monitoring removed - not necessary for dashboard functionality
+                // Dashboard works reliably without health checks
+            }
+
+            showConnectionStatus(message, type) {
+                const status = $('.connection-status');
+                if (status.length === 0) {
+                    $('body').append(`<div class="connection-status ${type}">${message}</div>`);
+                } else {
+                    status.removeClass('online offline').addClass(type).text(message);
+                }
+                $('.connection-status').show();
+            }
+
+            hideConnectionStatus() {
+                $('.connection-status').fadeOut();
+            }
+
+            /**
+             * Handle API errors with intelligent retry logic
+             *
+             * Implements exponential backoff retry strategy:
+             * - Up to 3 automatic retries with increasing delays (1s, 2s, 4s)
+             * - After max retries, shows persistent error with manual retry option
+             * - Tracks retry attempts per operation context
+             *
+             * @param {Error|string} error - The error that occurred
+             * @param {string} context - Human-readable context (e.g., 'Loading summary metrics')
+             * @param {Function} retryFunction - Function to call for retry attempts
+             */
+            handleApiError(error, context, retryFunction) {
+                console.error(`Error in ${context}:`, error);
+
+                const retryKey = context;
+                const attempts = this.retryAttempts.get(retryKey) || 0;
+
+                if (attempts < 3 && retryFunction) {
+                    // Auto-retry up to 3 times with exponential backoff
+                    const delay = Math.pow(2, attempts) * 1000; // 1s, 2s, 4s
+                    this.retryAttempts.set(retryKey, attempts + 1);
+
+                    setTimeout(() => {
+                        console.log(`Retrying ${context} (attempt ${attempts + 1})`);
+                        retryFunction();
+                    }, delay);
+
+                    this.showError(`${context} failed. Retrying in ${delay / 1000}s... (${attempts + 1}/3)`);
+                } else {
+                    // Show permanent error with retry option
+                    this.showPersistentError(error, context, retryFunction);
+                    this.retryAttempts.delete(retryKey);
+                }
+            }
+
+            showPersistentError(error, context, retryFunction) {
+                const errorId = `error-${Date.now()}`;
+                let errorMessage = 'An unexpected error occurred';
+
+                if (error.message) {
+                    errorMessage = error.message;
+                } else if (typeof error === 'string') {
+                    errorMessage = error;
+                }
+
+                const errorHtml = `
+                    <div class="error-boundary" id="${errorId}">
+                        <div class="error-title">
+                            <i class="fas fa-exclamation-triangle me-2"></i>
+                            ${context} Failed
+                        </div>
+                        <div class="error-details">
+                            ${errorMessage}
+                        </div>
+                        <div class="error-actions">
+                            ${retryFunction ? `<button class="retry-btn" onclick="dashboard.retryOperation('${context}', '${errorId}')">Retry</button>` : ''}
+                            <button class="dismiss-btn" onclick="$('#${errorId}').remove()">Dismiss</button>
+                        </div>
+                    </div>
+                `;
+
+                // Store retry function for later use
+                if (retryFunction) {
+                    this.errorBoundaries.set(context, retryFunction);
+                }
+
+                // Show error in appropriate location
+                const container = this.getErrorContainer(context);
+                container.prepend(errorHtml);
+            }
+
+            retryOperation(context, errorId) {
+                const retryFunction = this.errorBoundaries.get(context);
+                if (retryFunction) {
+                    $(`#${errorId}`).remove();
+                    this.retryAttempts.delete(context);
+                    retryFunction();
+                } else {
+                    console.warn(`No retry function found for context: ${context}`);
+                }
+            }
+
+            getErrorContainer(context) {
+                // Determine where to show the error based on context
+                switch (context) {
+                    case 'Loading summary metrics':
+                        return $('#kpi-container');
+                    case 'Loading revenue trends':
+                        return $('.chart-container:first');
+                    case 'Loading warehouse metrics':
+                        return $('#warehouse-comparison');
+                    case 'Loading top performers':
+                        return $('.table-container:first');
+                    default:
+                        return $('.container-fluid');
+                }
+            }
+
             showError(message) {
                 $('#error-text').text(message);
                 $('#error-message').show();
@@ -1163,7 +2636,7 @@ Completely separate from transfer planning to maintain system stability.
 
         // Initialize dashboard when page loads
         $(document).ready(() => {
-            new SalesDashboard();
+            window.dashboard = new SalesDashboard();
         });
     </script>
 </body>

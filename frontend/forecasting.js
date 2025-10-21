@@ -279,10 +279,14 @@ async function generateForecast() {
 
         const data = await response.json();
 
+        // Debug logging to verify API response
+        console.log('Generate Forecast API Response:', data);
+
         if (response.ok) {
             // V7.3 Phase 4: Check if forecast was queued or started
             if (data.status === 'queued') {
                 // Forecast was queued - show confirmation modal
+                console.log('Forecast queued at position:', data.queue_position);
                 $('#queuePositionText').text(data.queue_position);
                 const estimatedWait = `${data.queue_position * 15}-${data.queue_position * 20} minutes`;
                 $('#estimatedWaitText').text(estimatedWait);
@@ -296,8 +300,9 @@ async function generateForecast() {
 
                 // Reload runs table to show queued forecast
                 loadForecastRuns();
-            } else {
+            } else if (data.status === 'started' || data.status === 'pending') {
                 // Forecast started immediately
+                console.log('Forecast started immediately with run_id:', data.run_id);
                 showSuccess('Forecast generation started!');
                 currentRunId = data.run_id;
 
@@ -310,6 +315,11 @@ async function generateForecast() {
 
                 // Reset form
                 $('#generateForecastForm')[0].reset();
+            } else {
+                // Unexpected status - log warning and show generic success
+                console.warn('Unexpected forecast status:', data.status);
+                showSuccess('Forecast request processed successfully');
+                loadForecastRuns();
             }
         } else {
             showError(data.detail || 'Failed to start forecast generation');
@@ -690,25 +700,43 @@ async function showMonthlyDetails(forecast) {
 }
 
 /**
- * Cancel a running forecast
+ * Cancel a running or queued forecast
+ * @param {number} runId - The forecast run ID to cancel
+ * @param {string} status - The current status ('running' or 'queued')
  */
-async function cancelForecast(runId) {
-    if (!confirm('Are you sure you want to cancel this forecast generation?')) {
+async function cancelForecast(runId, status) {
+    const confirmMessage = status === 'queued'
+        ? 'Are you sure you want to remove this forecast from the queue?'
+        : 'Are you sure you want to cancel this forecast generation?';
+
+    if (!confirm(confirmMessage)) {
         return;
     }
 
     try {
-        const response = await fetch(`${API_BASE}/runs/${runId}/cancel`, {
-            method: 'POST'
-        });
+        // Use different endpoints for running vs queued forecasts
+        const endpoint = status === 'queued'
+            ? `${API_BASE}/queue/${runId}`  // DELETE /api/forecasts/queue/{run_id}
+            : `${API_BASE}/runs/${runId}/cancel`;  // POST /api/forecasts/runs/{run_id}/cancel
+
+        const method = status === 'queued' ? 'DELETE' : 'POST';
+
+        const response = await fetch(endpoint, { method });
 
         if (response.ok) {
-            showSuccess('Forecast cancelled');
-            clearInterval(progressInterval);
-            $('#currentJobSection').hide();
+            const data = await response.json();
+            showSuccess(data.message || 'Forecast cancelled successfully');
+
+            // Clear progress polling if canceling running forecast
+            if (status === 'running') {
+                clearInterval(progressInterval);
+                $('#currentJobSection').hide();
+            }
+
             loadForecastRuns();
         } else {
-            showError('Failed to cancel forecast');
+            const errorData = await response.json().catch(() => ({}));
+            showError(errorData.detail || 'Failed to cancel forecast');
         }
     } catch (error) {
         showError('Network error: ' + error.message);
@@ -778,8 +806,12 @@ function renderRunActions(data, type, row) {
                     <i class="fas fa-download"></i> Export
                  </button>`;
     } else if (row.status === 'running') {
-        html += `<button class="btn btn-sm btn-danger" onclick="cancelForecast(${row.run_id})">
+        html += `<button class="btn btn-sm btn-danger" onclick="cancelForecast(${row.run_id}, 'running')">
                     <i class="fas fa-times"></i> Cancel
+                 </button>`;
+    } else if (row.status === 'queued') {
+        html += `<button class="btn btn-sm btn-warning" onclick="cancelForecast(${row.run_id}, 'queued')">
+                    <i class="fas fa-times"></i> Remove from Queue
                  </button>`;
     }
 

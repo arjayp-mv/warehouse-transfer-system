@@ -54,7 +54,7 @@ class SeasonalAnalyzer:
         min_confidence_level: Minimum confidence level for pattern validation
     """
 
-    def __init__(self, min_months_required: int = 18, significance_threshold: float = 0.05,
+    def __init__(self, min_months_required: int = 18, significance_threshold: float = 0.15,
                  min_confidence_level: float = 0.6):
         """
         Initialize the Seasonal Analyzer
@@ -200,8 +200,8 @@ class SeasonalAnalyzer:
                     else:
                         confidence = 0.5  # Default confidence for single data points
 
-                    seasonal_factors[month] = round(seasonal_factor, 3)
-                    factor_confidence[month] = round(confidence, 3)
+                    seasonal_factors[month] = round(float(seasonal_factor), 3)
+                    factor_confidence[month] = round(float(confidence), 3)
                 else:
                     # No data for this month - use neutral factor
                     seasonal_factors[month] = 1.0
@@ -219,12 +219,14 @@ class SeasonalAnalyzer:
             result = {
                 'seasonal_factors': seasonal_factors,
                 'factor_confidence': factor_confidence,
-                'yearly_average': round(yearly_average, 2),
-                'monthly_averages': monthly_averages.to_dict('index'),
-                'pattern_strength': pattern_strength,
+                'yearly_average': round(float(yearly_average), 2),
+                'monthly_averages': {int(k): {str(inner_k): float(inner_v) if isinstance(inner_v, (int, float, np.number)) else inner_v
+                                           for inner_k, inner_v in v.items()}
+                                   for k, v in monthly_averages.to_dict('index').items()},
+                'pattern_strength': float(pattern_strength),
                 'pattern_type': pattern_type,
                 'statistical_significance': statistical_analysis,
-                'data_months': len(sales_data),
+                'data_months': int(len(sales_data)),
                 'analysis_date': datetime.now().isoformat()
             }
 
@@ -239,11 +241,24 @@ class SeasonalAnalyzer:
         """
         Perform statistical tests to validate seasonal pattern significance
 
+        Uses one-way ANOVA to test if there are statistically significant differences
+        between monthly demand patterns. All numpy types are converted to Python
+        native types to ensure JSON serialization compatibility.
+
         Args:
-            sales_data: DataFrame with demand data
+            sales_data: DataFrame with demand data containing 'month' and 'demand' columns
 
         Returns:
-            Dictionary with statistical test results
+            Dictionary with statistical test results including:
+            - test_type: Type of statistical test performed
+            - f_statistic: F-statistic value (converted to Python float)
+            - p_value: P-value of the test (converted to Python float)
+            - is_significant: Boolean indicating statistical significance
+            - confidence_level: Confidence level of the result
+            - groups_tested: Number of monthly groups in the test
+
+        Note:
+            Fixed numpy.bool_ serialization by explicitly converting to Python bool
         """
         try:
             # Group by month for ANOVA test
@@ -267,16 +282,16 @@ class SeasonalAnalyzer:
             # Perform one-way ANOVA to test for seasonal differences
             f_statistic, p_value = stats.f_oneway(*monthly_groups)
 
-            # Determine significance
-            is_significant = p_value < self.significance_threshold
+            # Determine significance (convert numpy.bool_ to Python bool for JSON serialization)
+            is_significant = bool(p_value < self.significance_threshold)
             confidence_level = 1.0 - p_value if p_value < 1.0 else 0.0
 
             return {
                 'test_type': 'one_way_anova',
-                'f_statistic': round(f_statistic, 4),
-                'p_value': round(p_value, 4),
+                'f_statistic': round(float(f_statistic), 4),
+                'p_value': round(float(p_value), 4),
                 'is_significant': is_significant,
-                'confidence_level': round(confidence_level, 3),
+                'confidence_level': round(float(confidence_level), 3),
                 'groups_tested': len(monthly_groups)
             }
 

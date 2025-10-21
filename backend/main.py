@@ -96,6 +96,16 @@ except ImportError as e:
 except Exception as e:
     logger.error(f"Error setting up sales routes: {e}")
 
+# Setup Forecasting API Routes (12-month sales forecasting)
+try:
+    from backend.forecasting_api import router as forecasting_router
+    app.include_router(forecasting_router)
+    logger.info("Forecasting API routes loaded successfully")
+except ImportError as e:
+    logger.warning(f"Forecasting module not available: {e}")
+except Exception as e:
+    logger.error(f"Error setting up forecasting routes: {e}")
+
 # =============================================================================
 # API ENDPOINTS - WAREHOUSE TRANSFER PLANNING TOOL
 # =============================================================================
