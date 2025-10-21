@@ -177,9 +177,16 @@ Performance: Background job processing, paginated results, CSV export
                                     </select>
                                 </div>
                                 <div class="col-md-2">
-                                    <label for="growthRate" class="form-label">Growth Rate (%)</label>
+                                    <label for="growthRate" class="form-label">
+                                        Growth Rate (%)
+                                        <i class="fas fa-info-circle text-muted"
+                                           data-bs-toggle="tooltip"
+                                           title="Optional: Leave at 0 for auto-calculation per SKU based on historical trends"></i>
+                                    </label>
                                     <input type="number" class="form-control" id="growthRate"
-                                           step="0.1" value="0" min="-100" max="100">
+                                           step="0.1" value="0" min="-100" max="100"
+                                           placeholder="0 = Auto">
+                                    <small class="form-text text-muted">0 = Auto-calculate</small>
                                 </div>
                                 <div class="col-md-2">
                                     <label for="abcFilter" class="form-label">ABC Filter</label>
@@ -189,6 +196,38 @@ Performance: Background job processing, paginated results, CSV export
                                         <option value="B">B - Medium Value</option>
                                         <option value="C">C - Low Value</option>
                                     </select>
+                                </div>
+                                <div class="col-md-2">
+                                    <label class="form-label">SKU Status</label>
+                                    <div class="dropdown">
+                                        <button class="btn btn-outline-secondary dropdown-toggle w-100" type="button"
+                                                id="statusFilterButton" data-bs-toggle="dropdown" aria-expanded="false">
+                                            <span id="statusFilterText">All Statuses</span>
+                                        </button>
+                                        <ul class="dropdown-menu" id="status-filter-dropdown" aria-labelledby="statusFilterButton">
+                                            <li>
+                                                <label class="dropdown-item">
+                                                    <input type="checkbox" id="status-select-all" class="form-check-input me-2" checked> Select All
+                                                </label>
+                                            </li>
+                                            <li><hr class="dropdown-divider"></li>
+                                            <li>
+                                                <label class="dropdown-item">
+                                                    <input type="checkbox" value="Active" class="form-check-input me-2 status-checkbox" checked> Active
+                                                </label>
+                                            </li>
+                                            <li>
+                                                <label class="dropdown-item">
+                                                    <input type="checkbox" value="Death Row" class="form-check-input me-2 status-checkbox" checked> Death Row
+                                                </label>
+                                            </li>
+                                            <li>
+                                                <label class="dropdown-item">
+                                                    <input type="checkbox" value="Discontinued" class="form-check-input me-2 status-checkbox" checked> Discontinued
+                                                </label>
+                                            </li>
+                                        </ul>
+                                    </div>
                                 </div>
                                 <div class="col-md-2">
                                     <label class="form-label d-block">&nbsp;</label>
@@ -303,6 +342,25 @@ Performance: Background job processing, paginated results, CSV export
                             </div>
                         </div>
 
+                        <!-- Search Box -->
+                        <div class="mb-3">
+                            <div class="input-group">
+                                <span class="input-group-text">
+                                    <i class="fas fa-search"></i>
+                                </span>
+                                <input type="text"
+                                       class="form-control"
+                                       id="resultsSearchInput"
+                                       placeholder="Search SKU or Description...">
+                                <button class="btn btn-outline-secondary" id="clearSearchBtn" type="button">
+                                    <i class="fas fa-times"></i> Clear
+                                </button>
+                            </div>
+                            <small class="text-muted">
+                                Search filters all results, not just the current page
+                            </small>
+                        </div>
+
                         <!-- Forecast Results Table -->
                         <table id="forecastResultsTable" class="table table-sm table-bordered">
                             <thead class="table-light">
@@ -315,11 +373,30 @@ Performance: Background job processing, paginated results, CSV export
                                     <th>Total Rev</th>
                                     <th>Confidence</th>
                                     <th>Method</th>
+                                    <th>Growth Rate</th>
                                     <th>Details</th>
                                 </tr>
                             </thead>
                             <tbody></tbody>
                         </table>
+
+                        <!-- Pagination Controls -->
+                        <div class="d-flex justify-content-between align-items-center mt-3" id="paginationControls" style="display: none;">
+                            <div>
+                                <span class="text-muted">
+                                    Showing page <strong id="currentPageDisplay">1</strong> of <strong id="totalPagesDisplay">1</strong>
+                                </span>
+                            </div>
+                            <div>
+                                <button class="btn btn-sm btn-outline-primary" id="prevPageBtn" disabled>
+                                    <i class="fas fa-chevron-left"></i> Previous
+                                </button>
+                                <span class="mx-2 text-muted" id="pageNumbersDisplay"></span>
+                                <button class="btn btn-sm btn-outline-primary" id="nextPageBtn">
+                                    Next <i class="fas fa-chevron-right"></i>
+                                </button>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -344,6 +421,44 @@ Performance: Background job processing, paginated results, CSV export
                     </div>
                     <!-- Monthly Data Grid -->
                     <div class="monthly-forecast-grid mt-4" id="monthlyGrid"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- V7.3 Phase 4: Queue Confirmation Modal -->
+    <div class="modal fade" id="queueConfirmModal" tabindex="-1" aria-labelledby="queueConfirmModalLabel" aria-hidden="true">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header bg-info text-white">
+                    <h5 class="modal-title" id="queueConfirmModalLabel">
+                        <i class="fas fa-clock me-2"></i>
+                        Forecast Already Running
+                    </h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="alert alert-info mb-3">
+                        <i class="fas fa-info-circle me-2"></i>
+                        A forecast generation is currently in progress.
+                    </div>
+                    <div class="mb-3">
+                        <strong>Your Position in Queue:</strong>
+                        <span id="queuePositionText" class="badge bg-primary fs-6">1</span>
+                    </div>
+                    <div class="mb-3">
+                        <strong>Estimated Wait:</strong>
+                        <span id="estimatedWaitText" class="text-muted">15-20 minutes</span>
+                    </div>
+                    <p class="mb-0">Would you like to queue this forecast or cancel?</p>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">
+                        <i class="fas fa-times me-2"></i>Cancel
+                    </button>
+                    <button type="button" class="btn btn-primary" id="confirmQueueBtn">
+                        <i class="fas fa-check me-2"></i>Queue Forecast
+                    </button>
                 </div>
             </div>
         </div>

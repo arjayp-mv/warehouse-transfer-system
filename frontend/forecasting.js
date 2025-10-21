@@ -70,6 +70,7 @@ function initializeTables() {
             { data: 'total_rev_forecast', render: renderCurrency },
             { data: 'confidence_score', render: renderConfidence },
             { data: 'method_used' },
+            { data: null, render: renderGrowthRate, orderable: false },
             { data: null, render: renderResultActions, orderable: false }
         ]
     });
@@ -144,6 +145,22 @@ function setupEventHandlers() {
         if (currentRunId) {
             searchForecastResults(currentRunId, '');
         }
+    });
+
+    // V7.3 Phase 4: Queue Forecast Confirmation Button
+    $('#confirmQueueBtn').on('click', function() {
+        // Close the modal
+        const modal = bootstrap.Modal.getInstance(document.getElementById('queueConfirmModal'));
+        modal.hide();
+
+        // Show success message
+        showSuccess('Forecast queued successfully! It will start when the current job completes.');
+
+        // Reset form
+        $('#generateForecastForm')[0].reset();
+
+        // Clear pending run ID
+        window.pendingQueuedRunId = null;
     });
 
     // Initialize status filter
@@ -263,18 +280,37 @@ async function generateForecast() {
         const data = await response.json();
 
         if (response.ok) {
-            showSuccess('Forecast generation started!');
-            currentRunId = data.run_id;
+            // V7.3 Phase 4: Check if forecast was queued or started
+            if (data.status === 'queued') {
+                // Forecast was queued - show confirmation modal
+                $('#queuePositionText').text(data.queue_position);
+                const estimatedWait = `${data.queue_position * 15}-${data.queue_position * 20} minutes`;
+                $('#estimatedWaitText').text(estimatedWait);
 
-            // Show progress section and start polling
-            $('#currentJobSection').show();
-            startProgressPolling(data.run_id);
+                // Store run_id for potential cancellation
+                window.pendingQueuedRunId = data.run_id;
 
-            // Reload runs table
-            loadForecastRuns();
+                // Show modal
+                const modal = new bootstrap.Modal(document.getElementById('queueConfirmModal'));
+                modal.show();
 
-            // Reset form
-            $('#generateForecastForm')[0].reset();
+                // Reload runs table to show queued forecast
+                loadForecastRuns();
+            } else {
+                // Forecast started immediately
+                showSuccess('Forecast generation started!');
+                currentRunId = data.run_id;
+
+                // Show progress section and start polling
+                $('#currentJobSection').show();
+                startProgressPolling(data.run_id);
+
+                // Reload runs table
+                loadForecastRuns();
+
+                // Reset form
+                $('#generateForecastForm')[0].reset();
+            }
         } else {
             showError(data.detail || 'Failed to start forecast generation');
         }
@@ -687,14 +723,21 @@ function exportForecastCSV(runId) {
 }
 
 // Rendering Functions
-function renderStatusBadge(status) {
+function renderStatusBadge(status, type, row) {
     const statusClass = getStatusClass(status);
+
+    // V7.3 Phase 4: Show queue position for queued forecasts
+    if (status === 'queued' && row && row.queue_position) {
+        return `<span class="badge ${statusClass}">QUEUED (Position ${row.queue_position})</span>`;
+    }
+
     return `<span class="badge ${statusClass}">${status.toUpperCase()}</span>`;
 }
 
 function getStatusClass(status) {
     const classes = {
         'pending': 'status-pending',
+        'queued': 'bg-info',  // V7.3 Phase 4: Blue badge for queued status
         'running': 'status-running',
         'completed': 'status-completed',
         'failed': 'status-failed',
@@ -706,6 +749,7 @@ function getStatusClass(status) {
 function renderProgress(progress, type, row) {
     if (row.status === 'completed') return '100%';
     if (row.status === 'pending') return '0%';
+    if (row.status === 'queued') return 'Queued';  // V7.3 Phase 4
     return progress.toFixed(1) + '%';
 }
 
@@ -766,6 +810,63 @@ function renderConfidence(score) {
     }
 
     return `<span class="${color}">${percent}</span>`;
+}
+
+function renderGrowthRate(data, type, row) {
+    const rate = row.growth_rate_applied || 0;
+    const source = row.growth_rate_source || 'default';
+
+    // Format percentage
+    const ratePercent = (rate * 100).toFixed(1) + '%';
+
+    // Determine color and icon based on rate
+    let rateColor = 'text-secondary';
+    let rateIcon = 'fa-minus';
+    if (rate > 0.05) {
+        rateColor = 'text-success';
+        rateIcon = 'fa-arrow-trend-up';
+    } else if (rate < -0.05) {
+        rateColor = 'text-danger';
+        rateIcon = 'fa-arrow-trend-down';
+    }
+
+    // Source badge and tooltip
+    let sourceBadge = '';
+    let sourceTooltip = '';
+    let sourceBadgeClass = 'bg-secondary';
+
+    switch(source) {
+        case 'manual_override':
+            sourceBadge = 'Manual';
+            sourceTooltip = 'User-specified growth rate';
+            sourceBadgeClass = 'bg-primary';
+            break;
+        case 'sku_trend':
+            sourceBadge = 'Auto';
+            sourceTooltip = 'Calculated from SKU historical trend using weighted regression';
+            sourceBadgeClass = 'bg-success';
+            break;
+        case 'category_trend':
+            sourceBadge = 'Category';
+            sourceTooltip = 'Insufficient SKU data - using category average trend';
+            sourceBadgeClass = 'bg-warning text-dark';
+            break;
+        case 'growth_status':
+            sourceBadge = 'Status';
+            sourceTooltip = 'Applied from SKU growth status (viral/declining)';
+            sourceBadgeClass = 'bg-info';
+            break;
+        case 'default':
+            sourceBadge = 'Default';
+            sourceTooltip = 'No data available - using 0% growth';
+            sourceBadgeClass = 'bg-secondary';
+            break;
+    }
+
+    return `<span class="${rateColor}" title="${sourceTooltip}">
+                <i class="fas ${rateIcon} me-1"></i>${ratePercent}
+                <span class="badge ${sourceBadgeClass} ms-1" style="font-size: 0.7rem;">${sourceBadge}</span>
+            </span>`;
 }
 
 // Notification Functions

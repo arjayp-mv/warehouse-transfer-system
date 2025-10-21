@@ -1191,14 +1191,17 @@ class ForecastEngine:
         return 100.0  # Conservative fallback if no category data
 
 
-def create_forecast_run(forecast_name: str, growth_assumption: float = 0.0, warehouse: str = 'combined') -> int:
+def create_forecast_run(forecast_name: str, growth_assumption: float = 0.0, warehouse: str = 'combined', status: str = 'pending') -> int:
     """
     Create a new forecast run entry.
+
+    V7.3 Phase 4: Added status parameter to support queued forecasts.
 
     Args:
         forecast_name: User-friendly name for this forecast
         growth_assumption: Manual growth rate override (0.0-1.0)
         warehouse: Warehouse location ('burnaby', 'kentucky', 'combined')
+        status: Initial status ('pending' or 'queued')
 
     Returns:
         ID of the created forecast run
@@ -1213,9 +1216,9 @@ def create_forecast_run(forecast_name: str, growth_assumption: float = 0.0, ware
             query = """
                 INSERT INTO forecast_runs
                 (forecast_name, forecast_date, status, warehouse, growth_assumption, created_by)
-                VALUES (%s, CURDATE(), 'pending', %s, %s, 'system')
+                VALUES (%s, CURDATE(), %s, %s, %s, 'system')
             """
-            cursor.execute(query, (forecast_name, warehouse, growth_assumption))
+            cursor.execute(query, (forecast_name, status, warehouse, growth_assumption))
             connection.commit()
 
             # Get the inserted ID from the same connection

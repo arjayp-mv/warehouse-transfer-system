@@ -115,21 +115,30 @@ async def generate_forecast(request: ForecastGenerateRequest):
 
         logger.info(f"API: SKU Filter: {sku_filter}, Warehouse: {request.warehouse}, Growth Rate: {request.growth_rate} (override: {growth_rate_override})")
 
-        # Start forecast generation (background job)
-        run_id = start_forecast_generation(
+        # V7.3 Phase 4: Start forecast generation (may start immediately or queue)
+        result = start_forecast_generation(
             forecast_name=request.forecast_name,
             sku_filter=sku_filter if sku_filter else None,
             warehouse=request.warehouse,
             growth_rate=growth_rate_override
         )
 
-        logger.info(f"API: Forecast generation started successfully with run_id={run_id}")
-
-        return {
-            "run_id": run_id,
-            "status": "pending",
-            "message": "Forecast generation started successfully"
-        }
+        # Handle different results based on queue status
+        if result['status'] == 'queued':
+            logger.info(f"API: Forecast queued at position {result['queue_position']} with run_id={result['run_id']}")
+            return {
+                "run_id": result['run_id'],
+                "status": "queued",
+                "queue_position": result['queue_position'],
+                "message": f"Forecast queued at position {result['queue_position']}"
+            }
+        else:  # status == 'started'
+            logger.info(f"API: Forecast generation started successfully with run_id={result['run_id']}")
+            return {
+                "run_id": result['run_id'],
+                "status": "pending",
+                "message": "Forecast generation started successfully"
+            }
 
     except ValueError as e:
         # No SKUs found matching filter criteria
@@ -137,17 +146,134 @@ async def generate_forecast(request: ForecastGenerateRequest):
             status_code=400,
             detail=f"Filter validation error: {str(e)}"
         )
-    except RuntimeError as e:
-        # Another forecast job is already running
-        raise HTTPException(
-            status_code=409,
-            detail=f"Conflict: {str(e)}"
-        )
     except Exception as e:
         # Unexpected error
         raise HTTPException(
             status_code=500,
             detail=f"Internal server error: Failed to start forecast generation. {str(e)}"
+        )
+
+
+@router.get("/queue")
+async def get_forecast_queue():
+    """
+    Get the current forecast generation queue status.
+
+    V7.3 Phase 4: Returns list of queued forecasts in FIFO order.
+
+    Returns:
+        List of queued forecast runs with queue position and metadata
+
+    Example Response:
+        [
+            {
+                "run_id": 5,
+                "forecast_name": "Q2 Forecast",
+                "queue_position": 1,
+                "queued_at": "2025-10-20T10:30:00",
+                "total_skus": 1768
+            },
+            {
+                "run_id": 6,
+                "forecast_name": "Q3 Forecast",
+                "queue_position": 2,
+                "queued_at": "2025-10-20T10:31:00",
+                "total_skus": 950
+            }
+        ]
+    """
+    try:
+        query = """
+            SELECT id, forecast_name, queue_position, queued_at, total_skus
+            FROM forecast_runs
+            WHERE status = 'queued'
+            ORDER BY queue_position ASC
+        """
+        results = execute_query(query, fetch_all=True)
+
+        queued_runs = []
+        for row in results:
+            queued_runs.append({
+                'run_id': row['id'],
+                'forecast_name': row['forecast_name'],
+                'queue_position': row['queue_position'],
+                'queued_at': row['queued_at'].isoformat() if row['queued_at'] else None,
+                'total_skus': row['total_skus']
+            })
+
+        logger.info(f"API: Retrieved {len(queued_runs)} queued forecasts")
+        return queued_runs
+
+    except Exception as e:
+        logger.error(f"API: Failed to retrieve queue: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to retrieve forecast queue: {str(e)}"
+        )
+
+
+@router.delete("/queue/{run_id}")
+async def cancel_queued_forecast(run_id: int):
+    """
+    Cancel a queued forecast and remove it from the queue.
+
+    V7.3 Phase 4: Allows users to cancel forecasts that are waiting in queue.
+    Cannot cancel forecasts that are already running.
+
+    Args:
+        run_id: ID of the forecast run to cancel
+
+    Returns:
+        Success message with run_id
+
+    Raises:
+        400: If forecast is not in queued status
+        404: If forecast run not found
+    """
+    try:
+        # Check if forecast exists and is queued
+        check_query = "SELECT status, forecast_name FROM forecast_runs WHERE id = %s"
+        result = execute_query(check_query, params=(run_id,), fetch_all=True)
+
+        if not result:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Forecast run {run_id} not found"
+            )
+
+        current_status = result[0]['status']
+        forecast_name = result[0]['forecast_name']
+
+        if current_status != 'queued':
+            raise HTTPException(
+                status_code=400,
+                detail=f"Cannot cancel forecast in status '{current_status}'. Only queued forecasts can be cancelled."
+            )
+
+        # Update status to cancelled
+        update_query = """
+            UPDATE forecast_runs
+            SET status = 'cancelled', queue_position = NULL
+            WHERE id = %s
+        """
+        execute_query(update_query, params=(run_id,))
+
+        logger.info(f"API: Cancelled queued forecast {run_id} ('{forecast_name}')")
+
+        return {
+            "message": f"Forecast '{forecast_name}' removed from queue",
+            "run_id": run_id,
+            "status": "cancelled"
+        }
+
+    except HTTPException:
+        # Re-raise HTTP exceptions as-is
+        raise
+    except Exception as e:
+        logger.error(f"API: Failed to cancel queued forecast {run_id}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to cancel forecast: {str(e)}"
         )
 
 

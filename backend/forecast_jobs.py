@@ -5,16 +5,21 @@ This module implements background job processing for generating forecasts.
 It uses threading to avoid blocking the main application while processing
 large batches of SKUs.
 
+V7.3 Phase 4: Added queue management system to handle concurrent forecast requests.
+Jobs are queued in FIFO order when a forecast is already running.
+
 Following best practices from claude-code-best-practices.md:
 - Thread-based workers for background processing
 - Batch processing (100 SKUs at a time)
 - Progress tracking in database
 - Error handling and recovery
+- Queue management for concurrent requests
 """
 
 import threading
 import time
 import logging
+import queue
 from typing import List, Dict
 from datetime import datetime
 from backend.database import execute_query
@@ -26,6 +31,10 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+# V7.3 Phase 4: Global forecast queue for handling concurrent requests
+_forecast_queue = queue.Queue()
+_queue_lock = threading.Lock()
 
 
 class ForecastJobWorker:
@@ -176,9 +185,6 @@ class ForecastJobWorker:
 
             logger.info(f"[Run {run_id}] Job completed in {duration:.2f}s: {processed_count} processed, {failed_count} failed")
 
-            self.is_running = False
-            self.current_job_id = None
-
         except Exception as e:
             # Catch any unhandled exceptions in the entire job
             duration = time.time() - start_time
@@ -192,8 +198,13 @@ class ForecastJobWorker:
                 error_message=error_msg
             )
 
+        finally:
+            # V7.3 Phase 4: Always reset worker state and process next queued job
             self.is_running = False
             self.current_job_id = None
+
+            # Process next job in queue if any
+            _process_next_queued_job()
 
     def get_job_status(self, run_id: int) -> Dict:
         """
@@ -264,6 +275,37 @@ class ForecastJobWorker:
         return False
 
 
+# V7.3 Phase 4: Queue processing function
+def _process_next_queued_job():
+    """
+    Process the next forecast job in the queue.
+
+    This function is called automatically when a forecast job completes.
+    It checks if there are any queued jobs and starts the next one in FIFO order.
+    """
+    if not _forecast_queue.empty():
+        next_job = _forecast_queue.get()
+
+        logger.info(f"Processing queued forecast {next_job['run_id']}")
+
+        # Update status from 'queued' to 'running' will happen in _run_forecast_job
+        # Clear queue_position since job is starting now
+        query = """
+            UPDATE forecast_runs
+            SET queue_position = NULL
+            WHERE id = %s
+        """
+        execute_query(query, params=(next_job['run_id'],))
+
+        # Start the queued job
+        _forecast_worker.start_forecast_job(
+            next_job['run_id'],
+            next_job['sku_ids'],
+            next_job['warehouse'],
+            next_job['growth_rate']
+        )
+
+
 # Global worker instance
 _forecast_worker = ForecastJobWorker()
 
@@ -273,9 +315,12 @@ def start_forecast_generation(
     sku_filter: Dict = None,
     warehouse: str = 'combined',
     growth_rate: float = 0.0
-) -> int:
+) -> Dict:
     """
-    Start a new forecast generation job.
+    Start a new forecast generation job or queue it if another job is running.
+
+    V7.3 Phase 4: Changed to return dict with status instead of just run_id.
+    If a job is already running, the new job is queued in FIFO order.
 
     Args:
         forecast_name: User-friendly name for this forecast
@@ -289,20 +334,18 @@ def start_forecast_generation(
         growth_rate: Optional growth rate to apply (e.g., 0.05 for 5% growth)
 
     Returns:
-        Forecast run ID
+        Dictionary with keys:
+        - run_id: Forecast run ID
+        - status: 'started' (job started immediately) or 'queued' (job queued)
+        - queue_position: Position in queue (only if status='queued')
 
     Raises:
-        RuntimeError: If a forecast job is already running
         ValueError: If no SKUs match the filter criteria
     """
     from backend.forecasting import create_forecast_run
 
     logger.info(f"Starting forecast generation: '{forecast_name}'")
     logger.info(f"Filters: {sku_filter}, Warehouse: {warehouse}, Growth Rate: {growth_rate}")
-
-    # Create forecast run entry with warehouse information
-    run_id = create_forecast_run(forecast_name, growth_rate, warehouse)
-    logger.info(f"Created forecast run with ID: {run_id}")
 
     # Get SKUs to process based on filter
     sku_ids = _get_skus_to_forecast(sku_filter)
@@ -312,25 +355,54 @@ def start_forecast_generation(
     if not sku_ids or len(sku_ids) == 0:
         error_msg = f"No SKUs found matching filter: {sku_filter}"
         logger.error(error_msg)
-
-        # Update run status to failed
-        update_forecast_run_status(
-            run_id,
-            status='failed',
-            total_skus=0,
-            processed_skus=0,
-            failed_skus=0,
-            error_message=error_msg
-        )
-
         raise ValueError(error_msg)
 
-    logger.info(f"Starting background job for {len(sku_ids)} SKUs")
+    # Check if a job is currently running
+    if _forecast_worker.is_running:
+        # Another forecast is running - queue this one
+        with _queue_lock:
+            queue_position = _forecast_queue.qsize() + 1
 
-    # Start background job
-    _forecast_worker.start_forecast_job(run_id, sku_ids, warehouse, growth_rate)
+        # Create forecast run entry with 'queued' status
+        run_id = create_forecast_run(forecast_name, growth_rate, warehouse, status='queued')
+        logger.info(f"Created queued forecast run with ID: {run_id}, position: {queue_position}")
 
-    return run_id
+        # Update queue position in database
+        query = """
+            UPDATE forecast_runs
+            SET queue_position = %s, queued_at = NOW()
+            WHERE id = %s
+        """
+        execute_query(query, params=(queue_position, run_id))
+
+        # Add to queue
+        _forecast_queue.put({
+            'run_id': run_id,
+            'sku_ids': sku_ids,
+            'warehouse': warehouse,
+            'growth_rate': growth_rate
+        })
+
+        logger.info(f"Forecast {run_id} queued at position {queue_position}")
+
+        return {
+            'run_id': run_id,
+            'status': 'queued',
+            'queue_position': queue_position
+        }
+
+    else:
+        # No forecast running - start immediately
+        run_id = create_forecast_run(forecast_name, growth_rate, warehouse)
+        logger.info(f"Created forecast run with ID: {run_id}")
+
+        logger.info(f"Starting background job for {len(sku_ids)} SKUs")
+        _forecast_worker.start_forecast_job(run_id, sku_ids, warehouse, growth_rate)
+
+        return {
+            'run_id': run_id,
+            'status': 'started'
+        }
 
 
 def _get_skus_to_forecast(sku_filter: Dict = None) -> List[str]:
