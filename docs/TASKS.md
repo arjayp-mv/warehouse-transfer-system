@@ -596,6 +596,89 @@ Identified that Burnaby warehouse forecasts show 60% lower values than historica
 
 ---
 
+### V7.3.1: Forecast Archive Management System (COMPLETED)
+
+**Summary**: Implemented comprehensive archive/unarchive system for forecast runs to improve UI cleanliness and historical forecast management. Includes bulk operations, archive page with restore functionality, and proper route handling.
+
+**Issue Fixed**: Critical FastAPI route ordering bug causing 422 errors when accessing `/api/forecasts/runs/archived` endpoint.
+
+**Key Features Delivered**:
+1. **Database Schema**
+   - Added `archived` BOOLEAN column to forecast_runs table (default: FALSE)
+   - Created index `idx_archived` for query performance
+   - Migration: database/add_archived_column.sql
+
+2. **Backend API Endpoints** (backend/forecasting_api.py)
+   - POST /api/forecasts/runs/{run_id}/archive (lines 779-835)
+   - POST /api/forecasts/runs/{run_id}/unarchive (lines 838-884)
+   - POST /api/forecasts/runs/bulk-archive (lines 887-965)
+   - GET /api/forecasts/runs/archived (lines 307-349)
+   - Updated get_active_forecast_runs() to filter WHERE archived = 0
+
+3. **Archive Page** (frontend/forecast-archive.html - NEW)
+   - Standalone archive viewing page with DataTables
+   - Bulk unarchive with checkboxes
+   - Individual "Restore" buttons per forecast
+   - "View" buttons redirect to main forecasting page with run_id parameter
+
+4. **Main UI Updates**
+   - Added "Archive" link to navbar (forecasting.html:139-141)
+   - Added "Archive Selected (N)" bulk button
+   - Archive buttons for completed/failed/cancelled forecasts
+   - Safety warnings for forecasts <7 days old
+   - Require typing "ARCHIVE" for 10+ item batches
+
+5. **Critical Bug Fix - Route Ordering**
+   - **Problem**: `/api/forecasts/runs/{run_id}` was catching "archived" as integer parameter
+   - **Solution**: Moved `/runs/archived` endpoint before `/runs/{run_id}` route
+   - **Impact**: Fixed 422 "Unprocessable Content" errors on archive page load
+
+**Testing Completed**:
+- Test 1: Archive page loads without 422 error
+- Test 2: Single unarchive operation (restored forecast successfully)
+- Test 3: Bulk unarchive (2 forecasts restored simultaneously)
+- Test 4: Navigation between main forecasting page and archive
+- Test 5: View archived forecast functionality (redirects with run_id parameter)
+
+**Safety Features**:
+- Cannot archive running/queued forecasts (backend validation)
+- Warning for forecasts <7 days old
+- Require typing "ARCHIVE" for batches of 10+ items
+- Simple confirmation for smaller batches
+
+**Files Modified**:
+- database/add_archived_column.sql (NEW - migration)
+- database/schema.sql (archived column + index)
+- backend/forecasting_api.py (4 new endpoints + route reordering fix)
+- backend/forecast_jobs.py (line 516 added WHERE archived = 0 filter)
+- frontend/forecast-archive.html (NEW - complete archive page)
+- frontend/forecasting.html (navbar link + bulk archive button)
+- frontend/forecasting.js (archive functions + UI updates)
+
+**Business Impact**:
+- Cleaner main forecast list (45+ forecasts now manageable)
+- Historical forecasts preserved but not cluttering active view
+- Easy restoration of archived forecasts when needed
+- Bulk operations save time when managing multiple forecasts
+
+**Technical Achievement**:
+- Proper FastAPI route ordering for specific vs parameterized routes
+- Clean separation of active vs archived forecasts in UI
+- Reversible operations (archive/unarchive with full data preservation)
+
+**Task Range**: TASK-586 to TASK-592
+
+**Tasks Completed**:
+- TASK-586: Database migration for archived column
+- TASK-587: Backend archive/unarchive endpoints
+- TASK-588: Archive page frontend (forecast-archive.html)
+- TASK-589: Main UI archive button integration
+- TASK-590: Bulk archive functionality with safety validations
+- TASK-591: Fix FastAPI route ordering (critical bug)
+- TASK-592: Complete testing with Playwright (all 5 tests passed)
+
+**Status**: COMPLETED (2025-10-22)
+
 ---
 
 ### V7.4: Auto Growth Rate Calculation (COMPLETED)

@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Host: 127.0.0.1
--- Generation Time: Oct 21, 2025 at 04:48 AM
+-- Generation Time: Oct 23, 2025 at 12:57 AM
 -- Server version: 10.4.32-MariaDB
 -- PHP Version: 8.2.12
 
@@ -70,7 +70,7 @@ CREATE TABLE `demand_calculation_config` (
 --
 
 CREATE TABLE `forecast_accuracy` (
-  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `id` int(11) NOT NULL,
   `sku_id` varchar(50) NOT NULL,
   `warehouse` enum('burnaby','kentucky','combined') NOT NULL DEFAULT 'combined' COMMENT 'Warehouse for this forecast (burnaby, kentucky, or combined)',
   `forecast_date` date NOT NULL COMMENT 'Date when forecast was made',
@@ -87,24 +87,13 @@ CREATE TABLE `forecast_accuracy` (
   `seasonal_pattern` varchar(20) DEFAULT NULL COMMENT 'Seasonal pattern at time of forecast',
   `is_actual_recorded` tinyint(1) DEFAULT 0 COMMENT 'Whether actual demand has been recorded',
   `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
-  `stockout_affected` tinyint(1) DEFAULT 0 COMMENT 'V8.0: TRUE if stockout occurred during forecast period, causing under-sales',
-  `volatility_at_forecast` decimal(5,2) DEFAULT NULL COMMENT 'V8.0: coefficient_variation from sku_demand_stats at time of forecast',
-  `data_quality_score` decimal(3,2) DEFAULT NULL COMMENT 'V8.0: Data quality score (0.00-1.00) at time of forecast',
-  `seasonal_confidence_at_forecast` decimal(5,4) DEFAULT NULL COMMENT 'V8.0: confidence_level from seasonal_factors at time of forecast',
-  `learning_applied` tinyint(1) DEFAULT 0 COMMENT 'V8.0: TRUE if learning adjustment was applied to this SKU',
-  `learning_applied_date` timestamp NULL DEFAULT NULL COMMENT 'V8.0: When learning adjustment was applied',
-  PRIMARY KEY (`id`),
-  UNIQUE KEY `unique_forecast` (`sku_id`,`warehouse`,`forecast_period_start`,`forecast_period_end`),
-  KEY `idx_forecast_date` (`forecast_date`),
-  KEY `idx_warehouse_period` (`warehouse`,`forecast_period_start`,`is_actual_recorded`),
-  KEY `idx_sku_period` (`sku_id`,`forecast_period_start`),
-  KEY `idx_accuracy_metrics` (`is_actual_recorded`,`absolute_percentage_error`),
-  KEY `idx_abc_xyz_accuracy` (`abc_class`,`xyz_class`,`absolute_percentage_error`),
-  KEY `idx_learning_status` (`learning_applied`,`forecast_date`),
-  KEY `idx_period_recorded` (`forecast_period_start`,`is_actual_recorded`),
-  KEY `idx_sku_recorded` (`sku_id`,`is_actual_recorded`,`forecast_period_start`),
-  CONSTRAINT `forecast_accuracy_ibfk_1` FOREIGN KEY (`sku_id`) REFERENCES `skus` (`sku_id`) ON DELETE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='Track forecast accuracy over time for continuous improvement. V8.0: Enhanced with context fields and learning system support';
+  `stockout_affected` tinyint(1) DEFAULT 0 COMMENT 'TRUE if stockout occurred during forecast period, causing under-sales. Used to avoid penalizing forecast when supply constraint caused low sales, not poor demand prediction.',
+  `volatility_at_forecast` decimal(5,2) DEFAULT NULL COMMENT 'coefficient_variation from sku_demand_stats at time of forecast. Helps understand if high MAPE was expected due to inherent SKU volatility (XYZ class).',
+  `data_quality_score` decimal(3,2) DEFAULT NULL COMMENT 'Data quality score (0.00-1.00) at time of forecast from sku_demand_stats. Indicates completeness and reliability of historical data used for prediction.',
+  `seasonal_confidence_at_forecast` decimal(5,4) DEFAULT NULL COMMENT 'confidence_level from seasonal_factors at time of forecast. Shows how confident we were in seasonal pattern at prediction time.',
+  `learning_applied` tinyint(1) DEFAULT 0 COMMENT 'TRUE if learning adjustment was applied to this SKU after analyzing this forecast performance. Tracks which SKUs have benefited from learning.',
+  `learning_applied_date` timestamp NULL DEFAULT NULL COMMENT 'When learning adjustment was applied. NULL if learning_applied is FALSE.'
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='Track forecast accuracy over time for continuous improvement';
 
 -- --------------------------------------------------------
 
@@ -125,34 +114,6 @@ CREATE TABLE `forecast_adjustments` (
   `adjusted_by` varchar(100) NOT NULL COMMENT 'User who made the adjustment',
   `adjusted_at` timestamp NOT NULL DEFAULT current_timestamp() COMMENT 'When adjustment was made'
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='Log of manual forecast adjustments';
-
--- --------------------------------------------------------
-
---
--- Table structure for table `forecast_learning_adjustments`
--- V8.0: System-learned adjustments separate from manual forecast_adjustments
---
-
-CREATE TABLE `forecast_learning_adjustments` (
-  `id` int(11) NOT NULL AUTO_INCREMENT,
-  `sku_id` varchar(50) NOT NULL,
-  `adjustment_type` enum('growth_rate','seasonal_factor','method_switch','volatility_adjustment','category_default') NOT NULL COMMENT 'Type of adjustment',
-  `original_value` decimal(10,4) DEFAULT NULL COMMENT 'Value before adjustment',
-  `adjusted_value` decimal(10,4) NOT NULL COMMENT 'Recommended value after adjustment',
-  `adjustment_magnitude` decimal(10,4) NOT NULL COMMENT 'Size of adjustment for tracking',
-  `learning_reason` text NOT NULL COMMENT 'Why this adjustment is recommended',
-  `confidence_score` decimal(3,2) NOT NULL COMMENT 'Confidence in this adjustment (0.00-1.00)',
-  `mape_before` decimal(5,2) DEFAULT NULL COMMENT 'MAPE before adjustment',
-  `mape_expected` decimal(5,2) DEFAULT NULL COMMENT 'Expected MAPE after adjustment',
-  `applied` tinyint(1) DEFAULT 0 COMMENT 'TRUE when adjustment is applied',
-  `applied_date` timestamp NULL DEFAULT NULL COMMENT 'When adjustment was applied',
-  `created_at` timestamp NOT NULL DEFAULT current_timestamp() COMMENT 'When learning system generated this',
-  PRIMARY KEY (`id`),
-  KEY `idx_applied` (`applied`,`created_at`),
-  KEY `idx_sku_type` (`sku_id`,`adjustment_type`),
-  KEY `idx_confidence` (`confidence_score`,`created_at`),
-  CONSTRAINT `forecast_learning_adjustments_ibfk_1` FOREIGN KEY (`sku_id`) REFERENCES `skus` (`sku_id`) ON DELETE CASCADE ON UPDATE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='V8.0: System-learned adjustments to forecast parameters based on accuracy analysis';
 
 -- --------------------------------------------------------
 
@@ -206,6 +167,28 @@ CREATE TABLE `forecast_details` (
 -- --------------------------------------------------------
 
 --
+-- Table structure for table `forecast_learning_adjustments`
+--
+
+CREATE TABLE `forecast_learning_adjustments` (
+  `id` int(11) NOT NULL,
+  `sku_id` varchar(50) NOT NULL,
+  `adjustment_type` enum('growth_rate','seasonal_factor','method_switch','volatility_adjustment','category_default') NOT NULL COMMENT 'Type of adjustment',
+  `original_value` decimal(10,4) DEFAULT NULL COMMENT 'Value before adjustment',
+  `adjusted_value` decimal(10,4) NOT NULL COMMENT 'Recommended value after adjustment',
+  `adjustment_magnitude` decimal(10,4) NOT NULL COMMENT 'Size of adjustment for tracking',
+  `learning_reason` text NOT NULL COMMENT 'Why this adjustment is recommended',
+  `confidence_score` decimal(3,2) NOT NULL COMMENT 'Confidence in this adjustment (0.00-1.00)',
+  `mape_before` decimal(5,2) DEFAULT NULL COMMENT 'MAPE before adjustment',
+  `mape_expected` decimal(5,2) DEFAULT NULL COMMENT 'Expected MAPE after adjustment',
+  `applied` tinyint(1) DEFAULT 0 COMMENT 'TRUE when adjustment is applied',
+  `applied_date` timestamp NULL DEFAULT NULL COMMENT 'When adjustment was applied',
+  `created_at` timestamp NOT NULL DEFAULT current_timestamp() COMMENT 'When learning system generated this'
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='System-learned adjustments to forecast parameters';
+
+-- --------------------------------------------------------
+
+--
 -- Table structure for table `forecast_runs`
 --
 
@@ -216,7 +199,7 @@ CREATE TABLE `forecast_runs` (
   `forecast_type` enum('monthly','quarterly','annual') DEFAULT 'monthly' COMMENT 'Forecast granularity',
   `warehouse` enum('burnaby','kentucky','combined') DEFAULT 'combined',
   `status` enum('pending','queued','running','completed','failed','cancelled') DEFAULT 'pending' COMMENT 'Current status of forecast generation',
-  `archived` tinyint(1) DEFAULT 0 COMMENT 'Whether forecast is archived (hidden from main view)',
+  `archived` tinyint(1) DEFAULT 0,
   `queue_position` int(11) DEFAULT NULL COMMENT 'Position in forecast generation queue (NULL if not queued)',
   `growth_assumption` decimal(5,2) DEFAULT 0.00 COMMENT 'Manual growth rate override (percentage)',
   `created_by` varchar(100) DEFAULT 'system' COMMENT 'User who created this forecast',
@@ -1115,11 +1098,15 @@ ALTER TABLE `demand_calculation_config`
 --
 ALTER TABLE `forecast_accuracy`
   ADD PRIMARY KEY (`id`),
-  ADD UNIQUE KEY `unique_forecast` (`sku_id`,`forecast_date`,`forecast_period_start`),
+  ADD UNIQUE KEY `unique_forecast` (`sku_id`,`warehouse`,`forecast_period_start`,`forecast_period_end`),
   ADD KEY `idx_forecast_date` (`forecast_date`),
   ADD KEY `idx_sku_period` (`sku_id`,`forecast_period_start`),
   ADD KEY `idx_accuracy_metrics` (`is_actual_recorded`,`absolute_percentage_error`),
-  ADD KEY `idx_abc_xyz_accuracy` (`abc_class`,`xyz_class`,`absolute_percentage_error`);
+  ADD KEY `idx_abc_xyz_accuracy` (`abc_class`,`xyz_class`,`absolute_percentage_error`),
+  ADD KEY `idx_learning_status` (`learning_applied`,`forecast_date`) COMMENT 'Optimize queries for finding forecasts pending learning adjustments',
+  ADD KEY `idx_period_recorded` (`forecast_period_start`,`is_actual_recorded`) COMMENT 'Optimize monthly accuracy update job that finds forecasts for specific periods',
+  ADD KEY `idx_sku_recorded` (`sku_id`,`is_actual_recorded`,`forecast_period_start`) COMMENT 'Optimize SKU-level accuracy queries and learning analysis',
+  ADD KEY `idx_warehouse_period` (`warehouse`,`forecast_period_start`,`is_actual_recorded`);
 
 --
 -- Indexes for table `forecast_adjustments`
@@ -1142,16 +1129,25 @@ ALTER TABLE `forecast_details`
   ADD KEY `idx_confidence` (`confidence_score`);
 
 --
+-- Indexes for table `forecast_learning_adjustments`
+--
+ALTER TABLE `forecast_learning_adjustments`
+  ADD PRIMARY KEY (`id`),
+  ADD KEY `idx_applied` (`applied`,`created_at`) COMMENT 'Find pending adjustments',
+  ADD KEY `idx_sku_type` (`sku_id`,`adjustment_type`) COMMENT 'Get all adjustments for a SKU by type',
+  ADD KEY `idx_confidence` (`confidence_score`,`created_at`) COMMENT 'Find high-confidence adjustments';
+
+--
 -- Indexes for table `forecast_runs`
 --
 ALTER TABLE `forecast_runs`
   ADD PRIMARY KEY (`id`),
   ADD KEY `idx_forecast_status` (`status`),
-  ADD KEY `idx_archived` (`archived`),
   ADD KEY `idx_forecast_date` (`forecast_date`),
   ADD KEY `idx_created_at` (`created_at`),
   ADD KEY `idx_queue_position` (`queue_position`),
-  ADD KEY `idx_queued_at` (`queued_at`);
+  ADD KEY `idx_queued_at` (`queued_at`),
+  ADD KEY `idx_archived` (`archived`);
 
 --
 -- Indexes for table `inventory_current`
@@ -1356,6 +1352,12 @@ ALTER TABLE `forecast_details`
   MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
 
 --
+-- AUTO_INCREMENT for table `forecast_learning_adjustments`
+--
+ALTER TABLE `forecast_learning_adjustments`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
+
+--
 -- AUTO_INCREMENT for table `forecast_runs`
 --
 ALTER TABLE `forecast_runs`
@@ -1438,6 +1440,12 @@ ALTER TABLE `forecast_adjustments`
 ALTER TABLE `forecast_details`
   ADD CONSTRAINT `forecast_details_ibfk_1` FOREIGN KEY (`forecast_run_id`) REFERENCES `forecast_runs` (`id`) ON DELETE CASCADE,
   ADD CONSTRAINT `forecast_details_ibfk_2` FOREIGN KEY (`sku_id`) REFERENCES `skus` (`sku_id`) ON DELETE CASCADE;
+
+--
+-- Constraints for table `forecast_learning_adjustments`
+--
+ALTER TABLE `forecast_learning_adjustments`
+  ADD CONSTRAINT `forecast_learning_adjustments_ibfk_1` FOREIGN KEY (`sku_id`) REFERENCES `skus` (`sku_id`) ON DELETE CASCADE ON UPDATE CASCADE;
 
 --
 -- Constraints for table `inventory_current`
