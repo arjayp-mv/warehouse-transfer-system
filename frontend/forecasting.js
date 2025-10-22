@@ -35,8 +35,14 @@ function initializeTables() {
     // Forecast Runs Table
     forecastRunsTable = $('#forecastRunsTable').DataTable({
         pageLength: 10,
-        order: [[4, 'desc']], // Sort by created date descending
+        order: [[5, 'desc']], // Sort by created date descending (shifted by 1 for checkbox column)
         columns: [
+            {
+                data: null,
+                render: renderCheckbox,
+                orderable: false,
+                className: 'select-checkbox'
+            },
             { data: 'name' },
             { data: 'status', render: renderStatusBadge },
             { data: 'progress_percent', render: renderProgress },
@@ -700,21 +706,26 @@ async function showMonthlyDetails(forecast) {
 }
 
 /**
- * Cancel a running or queued forecast
+ * Cancel a pending, running, or queued forecast
  * @param {number} runId - The forecast run ID to cancel
- * @param {string} status - The current status ('running' or 'queued')
+ * @param {string} status - The current status ('pending', 'running', or 'queued')
  */
 async function cancelForecast(runId, status) {
-    const confirmMessage = status === 'queued'
-        ? 'Are you sure you want to remove this forecast from the queue?'
-        : 'Are you sure you want to cancel this forecast generation?';
+    let confirmMessage;
+    if (status === 'queued') {
+        confirmMessage = 'Are you sure you want to remove this forecast from the queue?';
+    } else if (status === 'pending') {
+        confirmMessage = 'Are you sure you want to cancel this pending forecast?';
+    } else {
+        confirmMessage = 'Are you sure you want to cancel this forecast generation?';
+    }
 
     if (!confirm(confirmMessage)) {
         return;
     }
 
     try {
-        // Use different endpoints for running vs queued forecasts
+        // Use different endpoints for running/pending vs queued forecasts
         const endpoint = status === 'queued'
             ? `${API_BASE}/queue/${runId}`  // DELETE /api/forecasts/queue/{run_id}
             : `${API_BASE}/runs/${runId}/cancel`;  // POST /api/forecasts/runs/{run_id}/cancel
@@ -737,6 +748,93 @@ async function cancelForecast(runId, status) {
         } else {
             const errorData = await response.json().catch(() => ({}));
             showError(errorData.detail || 'Failed to cancel forecast');
+        }
+    } catch (error) {
+        showError('Network error: ' + error.message);
+    }
+}
+
+/**
+ * Bulk delete selected forecasts
+ * Includes safety confirmations for recent forecasts and large batches
+ */
+async function bulkDeleteForecasts() {
+    const checked = document.querySelectorAll('.forecast-checkbox:checked');
+    const runIds = Array.from(checked).map(cb => parseInt(cb.dataset.runId));
+
+    if (runIds.length === 0) {
+        showError('No forecasts selected');
+        return;
+    }
+
+    // Get forecast data to check for recent forecasts
+    const forecastData = [];
+    forecastRunsTable.rows().every(function() {
+        const data = this.data();
+        if (runIds.includes(data.run_id)) {
+            forecastData.push(data);
+        }
+    });
+
+    // Check for recent forecasts (<7 days old)
+    const sevenDaysAgo = new Date();
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+
+    const recentForecasts = forecastData.filter(f => {
+        const createdDate = new Date(f.created_at);
+        return createdDate > sevenDaysAgo;
+    });
+
+    // Enhanced confirmation for recent forecasts
+    if (recentForecasts.length > 0) {
+        const recentNames = recentForecasts.map(f => f.name).join(', ');
+        const confirmMsg = `WARNING: ${recentForecasts.length} of the selected forecast(s) were created within the last 7 days:\n\n${recentNames}\n\nAre you sure you want to delete these recent forecasts?`;
+        if (!confirm(confirmMsg)) {
+            return;
+        }
+    }
+
+    // For large batches (>=10), require typing "DELETE"
+    if (runIds.length >= 10) {
+        const userInput = prompt(`You are about to delete ${runIds.length} forecasts.\n\nTo confirm this bulk deletion, please type DELETE (in capital letters):`);
+        if (userInput !== 'DELETE') {
+            showError('Bulk deletion cancelled. You must type "DELETE" to confirm.');
+            return;
+        }
+    } else {
+        // Simple confirmation for smaller batches
+        const confirmMsg = `Are you sure you want to delete ${runIds.length} forecast(s)?\nThis action cannot be undone.`;
+        if (!confirm(confirmMsg)) {
+            return;
+        }
+    }
+
+    try {
+        const response = await fetch(`${API_BASE}/runs/bulk-delete`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(runIds)
+        });
+
+        if (response.ok) {
+            const data = await response.json();
+            showSuccess(data.message || `Successfully deleted ${data.deleted_count} forecast(s)`);
+
+            // Clear selections and reload table
+            document.getElementById('selectAllCheckbox').checked = false;
+            updateBulkDeleteButton();
+            loadForecastRuns();
+        } else {
+            const errorData = await response.json().catch(() => ({}));
+            if (errorData.detail && errorData.detail.blocked) {
+                // Show detailed error for blocked forecasts
+                const blockedNames = errorData.detail.blocked.map(b => b.name).join(', ');
+                showError(`Cannot delete running/queued forecasts: ${blockedNames}`);
+            } else {
+                showError(errorData.detail || 'Failed to delete forecasts');
+            }
         }
     } catch (error) {
         showError('Network error: ' + error.message);
@@ -802,8 +900,11 @@ function renderRunActions(data, type, row) {
         html += `<button class="btn btn-sm btn-primary me-1" onclick="viewForecastResults(${row.run_id})">
                     <i class="fas fa-eye"></i> View
                  </button>`;
-        html += `<button class="btn btn-sm btn-success" onclick="exportForecastCSV(${row.run_id})">
+        html += `<button class="btn btn-sm btn-success me-1" onclick="exportForecastCSV(${row.run_id})">
                     <i class="fas fa-download"></i> Export
+                 </button>`;
+        html += `<button class="btn btn-sm btn-warning" onclick="archiveForecast(${row.run_id}, '${row.name}')">
+                    <i class="fas fa-archive"></i> Archive
                  </button>`;
     } else if (row.status === 'running') {
         html += `<button class="btn btn-sm btn-danger" onclick="cancelForecast(${row.run_id}, 'running')">
@@ -813,9 +914,55 @@ function renderRunActions(data, type, row) {
         html += `<button class="btn btn-sm btn-warning" onclick="cancelForecast(${row.run_id}, 'queued')">
                     <i class="fas fa-times"></i> Remove from Queue
                  </button>`;
+    } else if (row.status === 'pending') {
+        html += `<button class="btn btn-sm btn-secondary" onclick="cancelForecast(${row.run_id}, 'pending')">
+                    <i class="fas fa-times"></i> Cancel
+                 </button>`;
+    } else if (row.status === 'failed' || row.status === 'cancelled') {
+        // Show archive button for failed/cancelled forecasts
+        html += `<button class="btn btn-sm btn-warning" onclick="archiveForecast(${row.run_id}, '${row.name}')">
+                    <i class="fas fa-archive"></i> Archive
+                 </button>`;
     }
 
     return html;
+}
+
+function renderCheckbox(data, type, row) {
+    // Don't show checkbox for running or queued forecasts
+    if (row.status === 'running' || row.status === 'queued') {
+        return '';
+    }
+    return `<input type="checkbox" class="forecast-checkbox" data-run-id="${row.run_id}" onchange="updateBulkDeleteButton()">`;
+}
+
+function toggleSelectAll() {
+    const selectAll = document.getElementById('selectAllCheckbox');
+    const checkboxes = document.querySelectorAll('.forecast-checkbox');
+    checkboxes.forEach(cb => {
+        cb.checked = selectAll.checked;
+    });
+    updateBulkDeleteButton();
+}
+
+function updateBulkDeleteButton() {
+    const checked = document.querySelectorAll('.forecast-checkbox:checked');
+    const count = checked.length;
+    const deleteBtn = document.getElementById('bulkDeleteBtn');
+    const archiveBtn = document.getElementById('bulkArchiveBtn');
+    const countSpan = document.getElementById('selectedCount');
+    const archiveCountSpan = document.getElementById('selectedArchiveCount');
+
+    if (count > 0) {
+        deleteBtn.style.display = 'inline-block';
+        archiveBtn.style.display = 'inline-block';
+        countSpan.textContent = count;
+        archiveCountSpan.textContent = count;
+    } else {
+        deleteBtn.style.display = 'none';
+        archiveBtn.style.display = 'none';
+        document.getElementById('selectAllCheckbox').checked = false;
+    }
 }
 
 function renderResultActions(data, type, row, meta) {
@@ -928,4 +1075,117 @@ function showNotification(message, type) {
     setTimeout(() => {
         $('.alert').alert('close');
     }, 5000);
+}
+
+/**
+ * Archive single forecast
+ * Moves forecast to archive view (hidden from main list)
+ */
+async function archiveForecast(runId, name) {
+    if (!confirm(`Archive "${name}"?\n\nArchived forecasts can be restored from the Archive page.`)) {
+        return;
+    }
+
+    try {
+        const response = await fetch(`${API_BASE}/runs/${runId}/archive`, {
+            method: 'POST'
+        });
+
+        if (response.ok) {
+            const data = await response.json();
+            showSuccess(data.message || 'Forecast archived successfully');
+            loadForecastRuns();
+        } else {
+            const errorData = await response.json().catch(() => ({}));
+            showError(errorData.detail || 'Failed to archive forecast');
+        }
+    } catch (error) {
+        showError('Network error: ' + error.message);
+    }
+}
+
+/**
+ * Bulk archive forecasts with safety confirmations
+ * Same safety rules as bulk delete (warn for recent, require typing for 10+)
+ */
+async function bulkArchiveForecasts() {
+    const checked = document.querySelectorAll('.forecast-checkbox:checked');
+    const runIds = Array.from(checked).map(cb => parseInt(cb.dataset.runId));
+
+    if (runIds.length === 0) {
+        showError('No forecasts selected');
+        return;
+    }
+
+    // Get forecast data to check for recent forecasts
+    const forecastData = [];
+    forecastRunsTable.rows().every(function() {
+        const data = this.data();
+        if (runIds.includes(data.run_id)) {
+            forecastData.push(data);
+        }
+    });
+
+    // Check for recent forecasts (<7 days old)
+    const sevenDaysAgo = new Date();
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+
+    const recentForecasts = forecastData.filter(f => {
+        const createdDate = new Date(f.created_at);
+        return createdDate > sevenDaysAgo;
+    });
+
+    // Enhanced confirmation for recent forecasts
+    if (recentForecasts.length > 0) {
+        const recentNames = recentForecasts.map(f => f.name).join(', ');
+        const confirmMsg = `WARNING: ${recentForecasts.length} of the selected forecast(s) were created within the last 7 days:\n\n${recentNames}\n\nAre you sure you want to archive these recent forecasts?`;
+        if (!confirm(confirmMsg)) {
+            return;
+        }
+    }
+
+    // For large batches (>=10), require typing "ARCHIVE"
+    if (runIds.length >= 10) {
+        const userInput = prompt(`You are about to archive ${runIds.length} forecasts.\n\nTo confirm this bulk archive, please type ARCHIVE (in capital letters):`);
+        if (userInput !== 'ARCHIVE') {
+            showError('Bulk archive cancelled. You must type "ARCHIVE" to confirm.');
+            return;
+        }
+    } else {
+        // Simple confirmation for smaller batches
+        const confirmMsg = `Are you sure you want to archive ${runIds.length} forecast(s)?\n\nYou can restore them later from the Archive page.`;
+        if (!confirm(confirmMsg)) {
+            return;
+        }
+    }
+
+    try {
+        const response = await fetch(`${API_BASE}/runs/bulk-archive`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(runIds)
+        });
+
+        if (response.ok) {
+            const data = await response.json();
+            showSuccess(data.message || `Successfully archived ${data.archived_count} forecast(s)`);
+
+            // Clear selections and reload table
+            document.getElementById('selectAllCheckbox').checked = false;
+            updateBulkDeleteButton();
+            loadForecastRuns();
+        } else {
+            const errorData = await response.json().catch(() => ({}));
+            if (errorData.detail && errorData.detail.blocked) {
+                const blockedNames = errorData.detail.blocked.map(b => b.name).join(', ');
+                showError(`Cannot archive running/queued forecasts: ${blockedNames}`);
+            } else {
+                showError(errorData.detail || 'Failed to archive forecasts');
+            }
+        }
+    } catch (error) {
+        showError('Network error: ' + error.message);
+    }
 }

@@ -31,17 +31,22 @@ from backend.forecast_learning import (
     identify_problem_skus
 )
 
-# Configure logging to both file and console
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('logs/forecast_learning.log'),
-        logging.StreamHandler(sys.stdout)
-    ]
-)
-
+# Configure logging (only when run as script, not when imported)
 logger = logging.getLogger(__name__)
+
+def _configure_logging():
+    """
+    Configure logging for standalone script execution.
+    Not called when imported as a module (e.g., by API).
+    """
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.FileHandler('logs/forecast_learning.log'),
+            logging.StreamHandler(sys.stdout)
+        ]
+    )
 
 
 def run_learning_cycle():
@@ -140,6 +145,9 @@ def run_learning_cycle():
 
 
 if __name__ == "__main__":
+    # Configure logging for standalone execution
+    _configure_logging()
+
     result = run_learning_cycle()
 
     # Exit with appropriate code

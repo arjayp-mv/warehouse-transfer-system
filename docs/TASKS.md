@@ -867,18 +867,18 @@ A task is complete when:
 
 ---
 
-**Last Updated**: 2025-10-20
-**Total Tasks Completed**: 510 (V7.4 Complete - Auto Growth Rate Calculation Implemented)
-**Project Status**: Production Ready with Complete Forecasting Suite
-**Next Steps**: Monitor auto growth rate accuracy, gather user feedback on forecast quality
+**Last Updated**: 2025-10-22
+**Total Tasks Completed**: 585 (V8.0.2 Complete - User Guidance & Data Cleanup)
+**Project Status**: Production Ready - Forecast Accuracy System with Learning Engine
+**Next Steps**: Upload real sales data, run monthly accuracy workflow, monitor MAPE trends
 
-**Latest Achievement**: V7.0-V7.4 Complete Forecasting System:
-1. 12-month forecasting for 1,768 SKUs in <20 seconds
-2. ABC/XYZ-specific methodologies with confidence scoring
-3. Test & Learn pattern detection for new products (84% accuracy improvement)
-4. Auto growth rate calculation with XYZ-adaptive weighting
-5. Queue management for concurrent requests
-6. Complete audit trail with method tracking
+**Latest Achievement**: V8.0 Forecast Learning & Accuracy System + V8.0.2 User Guidance:
+1. Complete forecast accuracy tracking with stockout-aware MAPE calculation
+2. Multi-dimensional learning engine (growth adjustments, method effectiveness, problem detection)
+3. Interactive dashboard with trend charts, ABC/XYZ heatmap, problem SKU table
+4. User guidance improvements (tooltips, workflow guide, validation warnings)
+5. Corrupted test data cleaned (294 records reset, ready for real data)
+6. Production-ready UI for non-technical users (no Python scripts required)
 
 ---
 
@@ -1507,6 +1507,261 @@ A task is complete when:
 **Known Issue - File Size**:
 - **backend/forecasting_api.py**: Now 1,196 lines (exceeds 500-line maximum)
 - **Refactoring required**: See TASK-569 below for modular router splitting plan
+
+---
+
+### V8.0.1 Phase 4.1: Production Readiness Fixes (TASK-581 to TASK-585) - 5 hours ✅ COMPLETED
+
+**Status**: ALL TASKS COMPLETED (2025-10-22)
+
+**Objective**: Fix duplicate forecast issue and add missing UI controls to make forecast accuracy system production-ready for non-technical users.
+
+#### Critical Issues Addressed
+
+**Issue 1: Duplicate Forecast Prevention**
+- Problem: Database allowed multiple forecasts for same SKU/warehouse/period (different forecast_date values)
+- Impact: Users could regenerate forecasts creating duplicates, resulting in multiple MAPE scores for same month
+- Root Cause: UNIQUE KEY included forecast_date, allowing same period forecasts from different days
+
+**Issue 2: Missing UI Controls**
+- Problem: Users required to run Python scripts or API calls to trigger accuracy updates and learning analysis
+- Impact: Not production-ready - non-technical users couldn't operate the system
+- Root Cause: Phase 4 focused on visualization, didn't include action buttons
+
+#### Implementation Details
+
+- [x] **TASK-581**: Update database UNIQUE KEY constraint
+  - File: database/schema.sql (line 97)
+  - Changed from: (sku_id, warehouse, forecast_date, forecast_period_start)
+  - Changed to: (sku_id, warehouse, forecast_period_start, forecast_period_end)
+  - Cleaned 24 duplicate records (kept most recent forecast per period)
+  - Result: Only one forecast per SKU/warehouse/period allowed
+
+- [x] **TASK-582**: Update insert logic with ON DUPLICATE KEY UPDATE
+  - File: backend/forecast_accuracy.py (lines 194-215)
+  - Added ON DUPLICATE KEY UPDATE clause to INSERT statement
+  - Updates all relevant fields when duplicate detected:
+    - predicted_demand, forecast_date, forecast_method
+    - abc_class, xyz_class, seasonal_pattern
+    - volatility_at_forecast, data_quality_score, seasonal_confidence_at_forecast
+  - Resets learning fields: is_actual_recorded=0, learning_applied=0, learning_applied_date=NULL
+  - Result: Regenerating forecasts updates existing records instead of failing
+
+- [x] **TASK-583**: Add POST /accuracy/learning/analyze API endpoint
+  - File: backend/forecasting_api.py (lines 970-1033, 64 new lines)
+  - Route: /api/forecasts/accuracy/learning/analyze
+  - Calls: run_learning_cycle() from backend/run_forecast_learning
+  - Returns: Success status with adjustment counts (growth, method, category, problems)
+  - Fixed logging conflict: Modified run_forecast_learning.py to only configure logging in standalone mode
+
+- [x] **TASK-584**: Add UI action buttons to dashboard
+  - File: frontend/forecast-accuracy.html (added lines 146-200, 55 new lines)
+  - Created "Forecast Accuracy Actions" card with 3 components:
+    - Month selector (type="month", defaults to current month)
+    - "Update Accuracy" button (btn-success, calls triggerAccuracyUpdate())
+    - "Run Learning Analysis" button (btn-info, calls triggerLearningAnalysis())
+  - Status message area (alert, auto-hides after 5 seconds for success)
+  - Progress spinner (Bootstrap spinner-border with message)
+
+- [x] **TASK-585**: Add JavaScript functions for button actions
+  - File: frontend/forecast-accuracy.html (added lines 589-720, 131 new lines)
+  - Functions implemented:
+    - initializeTargetMonth(): Sets month picker to current month on load
+    - showStatus(message, type): Displays Bootstrap alert (success/warning/danger)
+    - showProgress(show, message): Shows/hides spinner with custom message
+    - setButtonsEnabled(enabled): Disables buttons during API calls
+    - triggerAccuracyUpdate(): Calls POST /accuracy/update, shows results, refreshes dashboard
+    - triggerLearningAnalysis(): Calls POST /accuracy/learning/analyze, shows results, refreshes dashboard
+  - Error handling: Try-catch blocks with user-friendly error messages
+  - Auto-refresh: Dashboard reloads after successful operations
+
+#### Testing Results
+
+**Database Testing (TASK-581/582)**:
+- Deleted 24 duplicate records from forecast_accuracy table (63,672 → 63,648 records)
+- Verified UNIQUE KEY constraint rejects plain INSERT with duplicate
+- Verified ON DUPLICATE KEY UPDATE successfully updates existing forecast
+- Confirmed zero duplicate forecast groups remain in database
+- Sample SKU (UB-YTX14-BS): Verified Oct 22 forecast kept, Oct 20-21 forecasts removed
+
+**API Testing (TASK-583)**:
+- Direct API call: POST /accuracy/learning/analyze returned 200 OK
+- Response time: 3.3 seconds (721 growth adjustments, 4 method classifications, 7 categories, 50 problem SKUs)
+- Fixed logging conflict: Modified run_forecast_learning.py to conditionally configure logging
+- Result: Endpoint works correctly without Internal Server Error
+
+**Playwright UI Testing (TASK-584/585)**:
+- Month picker: Correctly defaults to current month (2025-10)
+- Update Accuracy button: Shows "Accuracy update completed! Updated 294 forecasts with 0 stockout-affected periods"
+- Run Learning Analysis button: Shows "Learning analysis completed! Generated 0 recommendations"
+- Dashboard auto-refresh: Metrics and charts reload after button actions
+- Error handling: Invalid inputs show warning alerts
+- Progress indicators: Spinner displays during API calls
+- No console errors except harmless favicon 404
+
+**Phase 4.1 Completion Summary:**
+- **All 5 tasks completed**: TASK-581 to TASK-585 (100% complete)
+- **Database fix**: Prevents duplicate forecasts, allows regeneration via update
+- **New API endpoint**: POST /accuracy/learning/analyze for UI integration
+- **UI enhancements**: Action buttons card with month selector and 2 operation buttons
+- **JavaScript functions**: 6 new functions totaling 131 lines for button operations
+- **Production ready**: Non-technical users can now operate forecast accuracy system via UI
+
+**Files Modified in Phase 4.1**:
+- database/schema.sql (1 line changed) - UNIQUE KEY constraint updated
+- backend/forecast_accuracy.py (21 lines added) - ON DUPLICATE KEY UPDATE logic
+- backend/forecasting_api.py (64 lines added) - New learning endpoint
+- backend/run_forecast_learning.py (16 lines modified) - Fixed logging conflict
+- frontend/forecast-accuracy.html (186 lines added) - UI buttons and JavaScript functions
+
+**Technical Achievements**:
+- Idempotent forecast generation: Can regenerate forecasts safely anytime
+- User-friendly operations: No Python scripts or API knowledge required
+- Real-time feedback: Progress spinners and success/error messages
+- Automatic dashboard refresh: Data updates immediately after operations
+- Robust error handling: User-friendly messages for all failure scenarios
+- Performance: Accuracy update in <1s, learning analysis in ~3.3s
+
+**Business Impact**:
+- Production-ready system: Non-technical users can operate forecast accuracy features
+- Safe regeneration: Users can rerun forecasts without creating duplicates
+- One source of truth: Only one forecast per SKU/warehouse/period in database
+- Self-service operations: No developer assistance needed for monthly accuracy updates
+- Transparency: Clear feedback on operation results (forecasts updated, recommendations generated)
+
+---
+
+### V8.0.2: User Guidance & Metric Clarity Improvements (COMPLETED)
+
+**Status**: COMPLETED (2025-10-22)
+
+**Summary**: Enhanced forecast accuracy dashboard with comprehensive user guidance, clearer metric labels, and validation warnings to prevent data corruption from premature accuracy updates. Also cleaned corrupted forecast accuracy data from previous test run.
+
+#### Key Issues Addressed
+
+**Issue 1: Misleading Metric Label**
+- Problem: "Total Forecasts" showing 294 confused users (expected to match 63,648 forecast records)
+- Root Cause: Label didn't clarify it counts completed accuracy checks, not total forecast records
+- Fix: Changed label to "Forecasts with Actuals" for clarity
+
+**Issue 2: Missing User Guidance**
+- Problem: Users didn't know when to run accuracy update or learning analysis
+- Impact: Risk of corrupting data by running accuracy update without real sales data
+- Root Cause: No explanations for what buttons do or when to use them
+
+**Issue 3: Corrupted Test Data**
+- Problem: 294 forecast records with actual_demand=0, MAPE=99.66% from running accuracy update on October 2025 without real sales data
+- Impact: Dashboard showing artificially inflated error rates, would poison learning algorithms
+- Root Cause: No validation warnings to prevent running accuracy update on future/current months
+
+#### Implementation Completed
+
+- [x] **Metric Label Fix** (line 217)
+  - Changed from: "Total Forecasts"
+  - Changed to: "Forecasts with Actuals"
+  - Clarifies metric represents completed accuracy checks (294), not total forecast records (63,648)
+
+- [x] **Bootstrap Tooltips Added** (lines 133-192)
+  - Update Accuracy Button: Comprehensive tooltip explaining operation, timing, requirements, and impact
+  - Run Learning Analysis Button: Explains prerequisites (2-3 months data), when to use (AFTER accuracy update)
+  - Exclude Stockout Checkbox: Detailed explanation of CHECKED vs UNCHECKED use cases
+
+- [x] **Monthly Workflow Guide Card** (lines 214-290)
+  - Collapsible card with 5-step monthly process
+  - Step 1: Upload Sales Data (1st-2nd of month)
+  - Step 2: Update Accuracy (after upload, select completed month)
+  - Step 3: Review Dashboard (MAPE target <20%, check trends)
+  - Step 4: Run Learning Analysis (needs 2-3 months data)
+  - Step 5: Apply Adjustments (review recommendations table)
+  - Warning: Never run with test data or future months
+  - Time estimate: 15-30 minutes/month
+
+- [x] **Bootstrap Tooltips Initialization** (lines 816-823)
+  - Added JavaScript in DOMContentLoaded event
+  - Properly initializes all tooltips with HTML support
+
+- [x] **Smart Validation Warnings** (lines 740-761, 801-826)
+  - triggerAccuracyUpdate(): Warns if user selects current/future month
+  - Explains corruption risk (100% MAPE, invalid learning data)
+  - triggerLearningAnalysis(): Checks if completedForecasts < 100
+  - Warns about insufficient data for reliable recommendations
+
+- [x] **Corrupted Data Cleanup**
+  - Problem: 294 October 2025 records with actual_demand=0, MAPE=100%
+  - SQL Cleanup: Reset is_actual_recorded=0, cleared all error metrics
+  - Result: Database ready for real accuracy tracking when sales data available
+
+#### Testing Results
+
+**Playwright Verification**:
+- All tooltips display correctly with proper content on hover
+- Monthly Workflow Guide expands/collapses on click
+- Metric label shows "Forecasts with Actuals"
+- Both action buttons function correctly with validation warnings
+- Screenshot saved: .playwright-mcp/forecast-accuracy-v8.0.2-complete.png
+
+**Database Cleanup Verification**:
+- Before: 63,648 total records, 294 with actuals (corrupted), 63,354 waiting
+- After: 63,648 total records, 0 with actuals, 63,648 waiting
+- All 294 October 2025 records successfully reset to "waiting for actuals" status
+- Dashboard no longer shows corrupted 99.66% MAPE
+
+#### Files Modified
+
+- frontend/forecast-accuracy.html (~150 lines added/modified)
+  - Line 217: Metric label fix
+  - Lines 133-192: Bootstrap tooltips
+  - Lines 214-290: Monthly Workflow Guide card
+  - Lines 816-823: Tooltip initialization JavaScript
+  - Lines 740-761: Accuracy update validation warnings
+  - Lines 801-826: Learning analysis validation warnings
+
+#### Business Impact
+
+**User Experience**:
+- Clear understanding of what each button does and when to use it
+- Step-by-step monthly workflow prevents confusion
+- Validation warnings prevent data corruption
+- Estimated time commitment helps with planning (15-30 min/month)
+
+**Data Integrity**:
+- Prevented future data corruption with validation warnings
+- Cleaned existing corrupted data (294 records reset)
+- Dashboard metrics now accurate and meaningful
+- Learning algorithms won't be poisoned by fake error data
+
+**Operational Readiness**:
+- System ready for real monthly sales data upload
+- Users know exact workflow: upload sales → update accuracy → review → run learning
+- Tooltips provide just-in-time help without overwhelming UI
+- Collapsible guide available when needed, hidden when not
+
+#### User Instructions Provided
+
+**When to Use Stockout Filter**:
+- CHECKED (Exclude stockout-affected): For algorithm evaluation, learning analysis, method tuning
+- UNCHECKED (Include all): For business impact analysis, inventory planning assessment
+
+**Monthly Workflow Reminder**:
+1. 1st-2nd of month: Upload previous month's sales data
+2. After upload: Click "Update Accuracy" for COMPLETED month only
+3. Review dashboard: Check MAPE (target <20%), trends, problem SKUs
+4. 2nd-3rd of month: Click "Run Learning Analysis" (after 2-3 months of data)
+5. Apply adjustments: Review recommendations table
+
+**Critical Warnings**:
+- Never run accuracy update for current or future months
+- Never run with test/dummy data
+- Wait for real sales data before running operations
+- Run learning analysis only after 2-3 months of accuracy data accumulated
+
+#### Task Range
+
+**Tasks Completed**: V8.0.2 enhancements (user guidance, validation, cleanup)
+
+**Completion Date**: 2025-10-22
+
+**Next Steps**: Wait for real sales data, follow monthly workflow when ready
 
 ---
 

@@ -191,6 +191,7 @@ def record_forecast_for_accuracy_tracking(
                 predicted_qty = month_forecast['quantity']
 
                 # Enhanced insert with context fields (V8.0.1: Now includes warehouse)
+                # V8.0.1 Phase 4.1: Use ON DUPLICATE KEY UPDATE to allow forecast regeneration
                 insert_query = """
                     INSERT INTO forecast_accuracy
                     (sku_id, warehouse, forecast_date, forecast_period_start, forecast_period_end,
@@ -198,6 +199,19 @@ def record_forecast_for_accuracy_tracking(
                      seasonal_pattern, volatility_at_forecast, data_quality_score,
                      seasonal_confidence_at_forecast, is_actual_recorded)
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 0)
+                    ON DUPLICATE KEY UPDATE
+                        predicted_demand = VALUES(predicted_demand),
+                        forecast_date = VALUES(forecast_date),
+                        forecast_method = VALUES(forecast_method),
+                        abc_class = VALUES(abc_class),
+                        xyz_class = VALUES(xyz_class),
+                        seasonal_pattern = VALUES(seasonal_pattern),
+                        volatility_at_forecast = VALUES(volatility_at_forecast),
+                        data_quality_score = VALUES(data_quality_score),
+                        seasonal_confidence_at_forecast = VALUES(seasonal_confidence_at_forecast),
+                        is_actual_recorded = 0,
+                        learning_applied = 0,
+                        learning_applied_date = NULL
                 """
 
                 execute_query(

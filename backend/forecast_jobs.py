@@ -500,19 +500,20 @@ def cancel_forecast(run_id: int) -> bool:
 
 def get_active_forecast_runs(limit: int = 10) -> List[Dict]:
     """
-    Get list of recent forecast runs.
+    Get list of recent forecast runs (excludes archived forecasts).
 
     Args:
         limit: Maximum number of runs to return
 
     Returns:
-        List of forecast run dictionaries
+        List of forecast run dictionaries (non-archived only)
     """
     query = """
         SELECT id, forecast_name, forecast_date, status,
                total_skus, processed_skus, failed_skus,
                created_at, completed_at, duration_seconds
         FROM forecast_runs
+        WHERE archived = 0
         ORDER BY created_at DESC
         LIMIT %s
     """

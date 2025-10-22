@@ -304,6 +304,51 @@ async def get_forecast_runs(
         raise HTTPException(status_code=500, detail=f"Failed to fetch forecast runs: {str(e)}")
 
 
+@router.get("/runs/archived")
+async def get_archived_forecasts():
+    """
+    Get all archived forecast runs.
+    Returns forecasts that have been archived for historical reference.
+
+    Returns:
+        List of archived forecast runs with details
+
+    Raises:
+        HTTPException: If query fails
+    """
+    try:
+        query = """
+            SELECT
+                fr.id as run_id,
+                fr.forecast_name as name,
+                fr.forecast_date,
+                fr.status,
+                fr.created_at,
+                fr.created_by,
+                fr.completed_at,
+                fr.total_skus,
+                fr.processed_skus,
+                fr.failed_skus,
+                fr.duration_seconds,
+                fr.notes,
+                fr.archived,
+                ROUND((fr.processed_skus / NULLIF(fr.total_skus, 0)) * 100, 1) as progress_percent
+            FROM forecast_runs fr
+            WHERE fr.archived = 1
+            ORDER BY fr.created_at DESC
+        """
+
+        results = execute_query(query, fetch_all=True)
+
+        logger.info(f"API: Retrieved {len(results)} archived forecasts")
+
+        return results
+
+    except Exception as e:
+        logger.error(f"API: Failed to fetch archived forecasts: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to fetch archived forecasts: {str(e)}")
+
+
 @router.get("/runs/{run_id}", response_model=ForecastRunResponse)
 async def get_run_status(run_id: int):
     """
@@ -591,7 +636,7 @@ async def export_forecast_csv(run_id: int):
 @router.post("/runs/{run_id}/cancel")
 async def cancel_forecast_run(run_id: int):
     """
-    Cancel a running forecast generation job.
+    Cancel a forecast generation job (running or pending).
 
     Args:
         run_id: Forecast run ID
@@ -600,17 +645,325 @@ async def cancel_forecast_run(run_id: int):
         Success message
     """
     try:
-        success = cancel_forecast(run_id)
+        # Check forecast status first
+        check_query = "SELECT status, forecast_name FROM forecast_runs WHERE id = %s"
+        result = execute_query(check_query, params=(run_id,), fetch_all=True)
 
-        if not success:
-            raise HTTPException(status_code=404, detail="Forecast run not found or not running")
+        if not result:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Forecast run {run_id} not found"
+            )
 
-        return {"message": "Forecast run cancelled successfully"}
+        current_status = result[0]['status']
+        forecast_name = result[0]['forecast_name']
+
+        # Handle pending forecasts - simple status update
+        if current_status == 'pending':
+            update_query = """
+                UPDATE forecast_runs
+                SET status = 'cancelled'
+                WHERE id = %s
+            """
+            execute_query(update_query, params=(run_id,))
+            logger.info(f"API: Cancelled pending forecast {run_id} ('{forecast_name}')")
+
+            return {
+                "message": f"Forecast '{forecast_name}' cancelled successfully",
+                "run_id": run_id,
+                "status": "cancelled"
+            }
+
+        # Handle running forecasts - use worker cancel
+        elif current_status == 'running':
+            success = cancel_forecast(run_id)
+            if not success:
+                raise HTTPException(status_code=500, detail="Failed to cancel running forecast")
+
+            return {"message": f"Forecast '{forecast_name}' cancelled successfully"}
+
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Cannot cancel forecast in status '{current_status}'. Only pending or running forecasts can be cancelled."
+            )
 
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to cancel forecast: {str(e)}")
+
+
+@router.post("/runs/bulk-delete")
+async def bulk_delete_forecasts(run_ids: List[int]):
+    """
+    Delete multiple forecast runs in bulk.
+
+    Validates that forecasts can be safely deleted (not running/queued).
+    Returns list of successfully deleted IDs and any errors.
+
+    Args:
+        run_ids: List of forecast run IDs to delete
+
+    Returns:
+        Dict with deleted IDs and error details
+
+    Raises:
+        400: If any forecast cannot be deleted (running/queued)
+    """
+    try:
+        if not run_ids:
+            raise HTTPException(status_code=400, detail="No forecast IDs provided")
+
+        # Check status of all forecasts
+        placeholders = ','.join(['%s'] * len(run_ids))
+        check_query = f"""
+            SELECT id, forecast_name, status
+            FROM forecast_runs
+            WHERE id IN ({placeholders})
+        """
+        results = execute_query(check_query, params=tuple(run_ids), fetch_all=True)
+
+        if not results:
+            raise HTTPException(status_code=404, detail="No forecasts found with provided IDs")
+
+        # Validate that none are running or queued
+        blocked_forecasts = []
+        deletable_ids = []
+
+        for row in results:
+            if row['status'] in ('running', 'queued'):
+                blocked_forecasts.append({
+                    'id': row['id'],
+                    'name': row['forecast_name'],
+                    'status': row['status'],
+                    'reason': f"Cannot delete {row['status']} forecast"
+                })
+            else:
+                deletable_ids.append(row['id'])
+
+        # If any are blocked, return error with details
+        if blocked_forecasts:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    'message': 'Some forecasts cannot be deleted',
+                    'blocked': blocked_forecasts,
+                    'deletable_count': len(deletable_ids)
+                }
+            )
+
+        # Delete forecasts and their details (cascading delete handles forecast_details)
+        delete_placeholders = ','.join(['%s'] * len(deletable_ids))
+        delete_query = f"""
+            DELETE FROM forecast_runs
+            WHERE id IN ({delete_placeholders})
+        """
+        execute_query(delete_query, params=tuple(deletable_ids))
+
+        logger.info(f"API: Bulk deleted {len(deletable_ids)} forecasts: {deletable_ids}")
+
+        return {
+            'message': f'Successfully deleted {len(deletable_ids)} forecast(s)',
+            'deleted_ids': deletable_ids,
+            'deleted_count': len(deletable_ids)
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"API: Failed to bulk delete forecasts: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to delete forecasts: {str(e)}")
+
+
+@router.post("/runs/{run_id}/archive")
+async def archive_forecast_run(run_id: int):
+    """
+    Archive a forecast run (hide from main view).
+    Archived forecasts can be restored later.
+
+    Args:
+        run_id: ID of forecast run to archive
+
+    Returns:
+        Success message with forecast details
+
+    Raises:
+        HTTPException: If forecast not found or cannot be archived
+    """
+    try:
+        # Check forecast status first
+        check_query = "SELECT status, forecast_name FROM forecast_runs WHERE id = %s"
+        result = execute_query(check_query, params=(run_id,), fetch_all=True)
+
+        if not result:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Forecast run {run_id} not found"
+            )
+
+        current_status = result[0]['status']
+        forecast_name = result[0]['forecast_name']
+
+        # Cannot archive running or queued forecasts
+        if current_status in ('running', 'queued'):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Cannot archive {current_status} forecast. Cancel it first."
+            )
+
+        # Archive the forecast
+        update_query = """
+            UPDATE forecast_runs
+            SET archived = 1
+            WHERE id = %s
+        """
+        execute_query(update_query, params=(run_id,))
+
+        logger.info(f"API: Archived forecast {run_id} ('{forecast_name}')")
+
+        return {
+            "message": f"Forecast '{forecast_name}' archived successfully",
+            "run_id": run_id,
+            "archived": True
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"API: Failed to archive forecast: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to archive forecast: {str(e)}")
+
+
+@router.post("/runs/{run_id}/unarchive")
+async def unarchive_forecast_run(run_id: int):
+    """
+    Restore an archived forecast run to main view.
+
+    Args:
+        run_id: ID of forecast run to unarchive
+
+    Returns:
+        Success message with forecast details
+
+    Raises:
+        HTTPException: If forecast not found
+    """
+    try:
+        # Check if forecast exists
+        check_query = "SELECT forecast_name FROM forecast_runs WHERE id = %s"
+        result = execute_query(check_query, params=(run_id,), fetch_all=True)
+
+        if not result:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Forecast run {run_id} not found"
+            )
+
+        forecast_name = result[0]['forecast_name']
+
+        # Unarchive the forecast
+        update_query = """
+            UPDATE forecast_runs
+            SET archived = 0
+            WHERE id = %s
+        """
+        execute_query(update_query, params=(run_id,))
+
+        logger.info(f"API: Unarchived forecast {run_id} ('{forecast_name}')")
+
+        return {
+            "message": f"Forecast '{forecast_name}' restored successfully",
+            "run_id": run_id,
+            "archived": False
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"API: Failed to unarchive forecast: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to unarchive forecast: {str(e)}")
+
+
+@router.post("/runs/bulk-archive")
+async def bulk_archive_forecasts(run_ids: List[int]):
+    """
+    Archive multiple forecast runs in bulk.
+    Validates that forecasts can be safely archived (not running/queued).
+
+    Args:
+        run_ids: List of forecast run IDs to archive
+
+    Returns:
+        Success message with archived count
+
+    Raises:
+        HTTPException: If validation fails or archive operation fails
+    """
+    try:
+        if not run_ids:
+            raise HTTPException(status_code=400, detail="No forecast IDs provided")
+
+        # Check status of all forecasts
+        placeholders = ','.join(['%s'] * len(run_ids))
+        check_query = f"""
+            SELECT id, forecast_name, status
+            FROM forecast_runs
+            WHERE id IN ({placeholders})
+        """
+        results = execute_query(check_query, params=tuple(run_ids), fetch_all=True)
+
+        if not results:
+            raise HTTPException(status_code=404, detail="No forecasts found with provided IDs")
+
+        # Validate that none are running or queued
+        blocked_forecasts = []
+        archivable_ids = []
+
+        for row in results:
+            if row['status'] in ('running', 'queued'):
+                blocked_forecasts.append({
+                    'id': row['id'],
+                    'name': row['forecast_name'],
+                    'status': row['status'],
+                    'reason': f"Cannot archive {row['status']} forecast"
+                })
+            else:
+                archivable_ids.append(row['id'])
+
+        # If any are blocked, return error with details
+        if blocked_forecasts:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    'message': 'Some forecasts cannot be archived',
+                    'blocked': blocked_forecasts,
+                    'archivable_count': len(archivable_ids)
+                }
+            )
+
+        # Archive forecasts
+        archive_placeholders = ','.join(['%s'] * len(archivable_ids))
+        archive_query = f"""
+            UPDATE forecast_runs
+            SET archived = 1
+            WHERE id IN ({archive_placeholders})
+        """
+        execute_query(archive_query, params=tuple(archivable_ids))
+
+        logger.info(f"API: Bulk archived {len(archivable_ids)} forecasts: {archivable_ids}")
+
+        return {
+            'message': f'Successfully archived {len(archivable_ids)} forecast(s)',
+            'archived_ids': archivable_ids,
+            'archived_count': len(archivable_ids)
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"API: Failed to bulk archive forecasts: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to archive forecasts: {str(e)}")
 
 
 @router.get("/sku/{sku_id}")
@@ -847,6 +1200,72 @@ async def trigger_accuracy_update(target_month: Optional[str] = None):
     except Exception as e:
         logger.error(f"API: Accuracy update failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Accuracy update failed: {str(e)}")
+
+
+@router.post("/accuracy/learning/analyze", response_model=Dict)
+async def trigger_learning_analysis():
+    """
+    Manually trigger forecast learning analysis.
+
+    V8.0 Phase 3: Multi-dimensional learning system.
+
+    Executes all learning algorithms to analyze forecast performance
+    and generate parameter adjustment recommendations:
+    - Growth rate adjustment learning (ABC/XYZ-specific)
+    - Method effectiveness analysis (seasonal vs weighted avg)
+    - Category pattern learning (seasonal strength by category)
+    - Problem SKU identification (high MAPE patterns)
+
+    Should be run monthly after accuracy update completes (typically on 2nd of month).
+    Adjustments are logged as recommendations for manual review.
+
+    Returns:
+        Learning cycle results with adjustment counts and recommendations
+
+    Raises:
+        500: Learning analysis failed
+
+    Example:
+        POST /api/forecasts/accuracy/learning/analyze
+
+    Response:
+        {
+            "status": "success",
+            "message": "Learning analysis completed successfully",
+            "timestamp": "2025-10-22T15:30:00",
+            "results": {
+                "growth_adjustments": 23,
+                "method_recommendations": 12,
+                "problem_skus_identified": 5,
+                "total_adjustments": 40
+            }
+        }
+    """
+    from backend.run_forecast_learning import run_learning_cycle
+    from datetime import datetime
+
+    try:
+        logger.info("API: Manual learning analysis triggered")
+
+        # Execute learning algorithms
+        results = run_learning_cycle()
+
+        logger.info(f"API: Learning analysis completed")
+        logger.info(f"API: Generated {results.get('total_adjustments', 0)} total recommendations")
+
+        return {
+            "status": "success",
+            "message": "Learning analysis completed successfully",
+            "timestamp": datetime.now().isoformat(),
+            "results": results
+        }
+
+    except Exception as e:
+        logger.error(f"API: Learning analysis failed: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Learning analysis failed: {str(e)}"
+        )
 
 
 @router.get("/accuracy/summary")
