@@ -847,3 +847,350 @@ async def trigger_accuracy_update(target_month: Optional[str] = None):
     except Exception as e:
         logger.error(f"API: Accuracy update failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Accuracy update failed: {str(e)}")
+
+
+@router.get("/accuracy/summary")
+async def get_accuracy_summary(
+    warehouse: Optional[str] = Query(None, description="Filter by warehouse: burnaby, kentucky, combined, or null for all"),
+    exclude_stockouts: bool = Query(True, description="Exclude stockout-affected forecasts from MAPE calculation")
+):
+    """
+    Get forecast accuracy summary with MAPE trends and ABC/XYZ breakdown.
+
+    Returns overall accuracy metrics, 6-month MAPE trend, and accuracy by
+    ABC/XYZ classification. Supports warehouse filtering and stockout exclusion.
+
+    Args:
+        warehouse: Optional warehouse filter (burnaby/kentucky/combined/null=all)
+        exclude_stockouts: Exclude stockout-affected forecasts (default: True)
+
+    Returns:
+        Dictionary with:
+        - overall_mape: Overall MAPE across all completed forecasts
+        - total_forecasts: Total forecast records
+        - completed_forecasts: Forecasts with actuals recorded
+        - by_abc_xyz: MAPE breakdown by ABC/XYZ classification (9 cells)
+        - trend_6m: Monthly MAPE trend for last 6 months
+        - stockouts_excluded: Count of excluded stockout-affected forecasts
+    """
+    try:
+        # Build WHERE clause for warehouse and stockout filters
+        where_conditions = ["fa.is_actual_recorded = 1"]
+        params = []
+
+        if warehouse:
+            where_conditions.append("fa.warehouse = %s")
+            params.append(warehouse)
+
+        if exclude_stockouts:
+            where_conditions.append("(fa.stockout_affected = 0 OR fa.stockout_affected IS NULL)")
+
+        where_clause = " AND ".join(where_conditions)
+
+        # Query overall metrics
+        overall_query = f"""
+            SELECT
+                COUNT(*) as total_forecasts,
+                SUM(CASE WHEN fa.is_actual_recorded = 1 THEN 1 ELSE 0 END) as completed_forecasts,
+                AVG(CASE WHEN fa.is_actual_recorded = 1 THEN fa.absolute_percentage_error ELSE NULL END) as overall_mape,
+                SUM(CASE WHEN fa.stockout_affected = 1 THEN 1 ELSE 0 END) as stockouts_excluded
+            FROM forecast_accuracy fa
+            WHERE {where_clause if warehouse else 'fa.is_actual_recorded = 1'}
+        """
+        overall_result = execute_query(overall_query, tuple(params) if params else None, fetch_all=True)
+
+        overall = overall_result[0] if overall_result else {}
+
+        # Query ABC/XYZ breakdown
+        abc_xyz_query = f"""
+            SELECT
+                fa.abc_class,
+                fa.xyz_class,
+                AVG(fa.absolute_percentage_error) as avg_mape,
+                COUNT(*) as forecast_count
+            FROM forecast_accuracy fa
+            WHERE {where_clause}
+            GROUP BY fa.abc_class, fa.xyz_class
+            ORDER BY fa.abc_class, fa.xyz_class
+        """
+        abc_xyz_result = execute_query(abc_xyz_query, tuple(params) if params else None, fetch_all=True)
+
+        # Query 6-month trend
+        trend_query = f"""
+            SELECT
+                DATE_FORMAT(fa.forecast_period_start, '%Y-%m') as month,
+                AVG(fa.absolute_percentage_error) as avg_mape,
+                COUNT(*) as forecast_count
+            FROM forecast_accuracy fa
+            WHERE {where_clause}
+                AND fa.forecast_period_start >= DATE_SUB(NOW(), INTERVAL 6 MONTH)
+            GROUP BY DATE_FORMAT(fa.forecast_period_start, '%Y-%m')
+            ORDER BY month ASC
+        """
+        trend_result = execute_query(trend_query, tuple(params) if params else None, fetch_all=True)
+
+        return {
+            "overall_mape": float(overall.get('overall_mape', 0.0) or 0.0),
+            "total_forecasts": overall.get('total_forecasts', 0),
+            "completed_forecasts": overall.get('completed_forecasts', 0),
+            "stockouts_excluded": overall.get('stockouts_excluded', 0) if exclude_stockouts else 0,
+            "by_abc_xyz": [
+                {
+                    "abc_class": row['abc_class'],
+                    "xyz_class": row['xyz_class'],
+                    "avg_mape": float(row['avg_mape'] or 0.0),
+                    "forecast_count": row['forecast_count']
+                }
+                for row in abc_xyz_result
+            ],
+            "trend_6m": [
+                {
+                    "month": row['month'],
+                    "avg_mape": float(row['avg_mape'] or 0.0),
+                    "forecast_count": row['forecast_count']
+                }
+                for row in trend_result
+            ],
+            "warehouse_filter": warehouse,
+            "exclude_stockouts": exclude_stockouts
+        }
+
+    except Exception as e:
+        logger.error(f"API: Failed to get accuracy summary: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to get accuracy summary: {str(e)}")
+
+
+@router.get("/accuracy/sku/{sku_id}")
+async def get_sku_accuracy_history(sku_id: str):
+    """
+    Get forecast accuracy history for a specific SKU.
+
+    Returns up to 24 months of forecast accuracy data for the specified SKU,
+    including MAPE, bias, and trend analysis.
+
+    Args:
+        sku_id: SKU identifier
+
+    Returns:
+        Dictionary with:
+        - sku_id: SKU identifier
+        - total_forecasts: Total forecast records
+        - completed_forecasts: Forecasts with actuals recorded
+        - avg_mape: Average MAPE across completed forecasts
+        - avg_bias: Average bias (percentage error, signed)
+        - history: List of monthly forecast accuracy records (last 24 months)
+    """
+    try:
+        # Query overall metrics for SKU
+        overall_query = """
+            SELECT
+                COUNT(*) as total_forecasts,
+                SUM(CASE WHEN is_actual_recorded = 1 THEN 1 ELSE 0 END) as completed_forecasts,
+                AVG(CASE WHEN is_actual_recorded = 1 THEN absolute_percentage_error ELSE NULL END) as avg_mape,
+                AVG(CASE WHEN is_actual_recorded = 1 THEN percentage_error ELSE NULL END) as avg_bias
+            FROM forecast_accuracy
+            WHERE sku_id = %s
+        """
+        overall_result = execute_query(overall_query, (sku_id,), fetch_all=True)
+        overall = overall_result[0] if overall_result else {}
+
+        # Query historical accuracy data (last 24 months)
+        history_query = """
+            SELECT
+                forecast_period_start,
+                forecast_period_end,
+                warehouse,
+                predicted_demand,
+                actual_demand,
+                absolute_percentage_error as mape,
+                percentage_error as bias,
+                stockout_affected,
+                forecast_method,
+                abc_class,
+                xyz_class
+            FROM forecast_accuracy
+            WHERE sku_id = %s
+                AND is_actual_recorded = 1
+            ORDER BY forecast_period_start DESC
+            LIMIT 24
+        """
+        history_result = execute_query(history_query, (sku_id,), fetch_all=True)
+
+        return {
+            "sku_id": sku_id,
+            "total_forecasts": overall.get('total_forecasts', 0),
+            "completed_forecasts": overall.get('completed_forecasts', 0),
+            "avg_mape": float(overall.get('avg_mape', 0.0) or 0.0),
+            "avg_bias": float(overall.get('avg_bias', 0.0) or 0.0),
+            "history": [
+                {
+                    "period_start": row['forecast_period_start'].isoformat() if row['forecast_period_start'] else None,
+                    "period_end": row['forecast_period_end'].isoformat() if row['forecast_period_end'] else None,
+                    "warehouse": row['warehouse'],
+                    "predicted": float(row['predicted_demand'] or 0.0),
+                    "actual": float(row['actual_demand'] or 0.0),
+                    "mape": float(row['mape'] or 0.0),
+                    "bias": float(row['bias'] or 0.0),
+                    "stockout_affected": bool(row['stockout_affected']),
+                    "method": row['forecast_method'],
+                    "abc_class": row['abc_class'],
+                    "xyz_class": row['xyz_class']
+                }
+                for row in history_result
+            ]
+        }
+
+    except Exception as e:
+        logger.error(f"API: Failed to get SKU accuracy history for {sku_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to get SKU accuracy history: {str(e)}")
+
+
+@router.get("/accuracy/problems")
+async def get_problem_skus(
+    mape_threshold: float = Query(30.0, description="MAPE threshold for problem identification (default: 30%)"),
+    limit: int = Query(100, description="Maximum number of problem SKUs to return (max: 100)")
+):
+    """
+    Identify problem SKUs with chronic forecasting accuracy issues.
+
+    Uses the identify_problem_skus() function from forecast_learning module
+    to find SKUs with consistently high MAPE and provide diagnostic recommendations.
+
+    Args:
+        mape_threshold: MAPE threshold for problem identification (default: 30%)
+        limit: Maximum number of results (default: 100, max: 100)
+
+    Returns:
+        List of problem SKUs with:
+        - sku_id: SKU identifier
+        - description: SKU description
+        - abc_code: ABC classification
+        - xyz_code: XYZ classification
+        - avg_mape: Average MAPE
+        - avg_bias: Average bias
+        - forecast_method: Current forecasting method
+        - recommendations: List of diagnostic recommendations
+    """
+    try:
+        from backend.forecast_learning import identify_problem_skus
+
+        # Enforce maximum limit
+        limit = min(limit, 100)
+
+        # Call learning function to identify problems
+        problems = identify_problem_skus(mape_threshold=mape_threshold)
+
+        # Return limited results
+        return problems[:limit]
+
+    except Exception as e:
+        logger.error(f"API: Failed to identify problem SKUs: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to identify problem SKUs: {str(e)}")
+
+
+@router.get("/accuracy/learning-insights")
+async def get_learning_insights():
+    """
+    Get insights from forecast learning system.
+
+    Returns recent learning adjustments, method recommendations, and
+    category-level patterns discovered by the learning algorithms.
+
+    Returns:
+        Dictionary with:
+        - growth_adjustments: Recent growth rate adjustments
+        - seasonal_adjustments: Recent seasonal factor adjustments
+        - method_recommendations: Best methods by ABC/XYZ classification
+        - category_patterns: Category-level intelligence
+        - total_adjustments: Count of logged adjustments
+        - applied_adjustments: Count of applied adjustments
+    """
+    try:
+        # Query recent adjustments (last 90 days)
+        adjustments_query = """
+            SELECT
+                adjustment_type,
+                COUNT(*) as count,
+                AVG(adjustment_magnitude) as avg_magnitude,
+                AVG(confidence_score) as avg_confidence,
+                SUM(CASE WHEN applied = 1 THEN 1 ELSE 0 END) as applied_count
+            FROM forecast_learning_adjustments
+            WHERE created_at >= DATE_SUB(NOW(), INTERVAL 90 DAY)
+            GROUP BY adjustment_type
+            ORDER BY count DESC
+        """
+        adjustments_result = execute_query(adjustments_query, None, fetch_all=True)
+
+        # Query top adjustments by type for detail
+        top_growth_query = """
+            SELECT
+                sku_id,
+                original_value,
+                adjusted_value,
+                adjustment_magnitude,
+                confidence_score,
+                learning_reason,
+                created_at
+            FROM forecast_learning_adjustments
+            WHERE adjustment_type = 'growth_rate'
+                AND created_at >= DATE_SUB(NOW(), INTERVAL 90 DAY)
+            ORDER BY ABS(adjustment_magnitude) DESC
+            LIMIT 10
+        """
+        top_growth_result = execute_query(top_growth_query, None, fetch_all=True)
+
+        # Query method recommendations (from Phase 3 learning)
+        method_query = """
+            SELECT
+                sku_id,
+                adjustment_type,
+                learning_reason,
+                confidence_score,
+                created_at
+            FROM forecast_learning_adjustments
+            WHERE adjustment_type = 'method_recommendation'
+                AND created_at >= DATE_SUB(NOW(), INTERVAL 90 DAY)
+            ORDER BY confidence_score DESC
+            LIMIT 20
+        """
+        method_result = execute_query(method_query, None, fetch_all=True)
+
+        return {
+            "adjustments_by_type": [
+                {
+                    "type": row['adjustment_type'],
+                    "count": row['count'],
+                    "avg_magnitude": float(row['avg_magnitude'] or 0.0),
+                    "avg_confidence": float(row['avg_confidence'] or 0.0),
+                    "applied_count": row['applied_count']
+                }
+                for row in adjustments_result
+            ],
+            "top_growth_adjustments": [
+                {
+                    "sku_id": row['sku_id'],
+                    "original_value": float(row['original_value'] or 0.0),
+                    "adjusted_value": float(row['adjusted_value'] or 0.0),
+                    "magnitude": float(row['adjustment_magnitude'] or 0.0),
+                    "confidence": float(row['confidence_score'] or 0.0),
+                    "reason": row['learning_reason'],
+                    "created_at": row['created_at'].isoformat() if row['created_at'] else None
+                }
+                for row in top_growth_result
+            ],
+            "method_recommendations": [
+                {
+                    "sku_id": row['sku_id'],
+                    "recommendation": row['learning_reason'],
+                    "confidence": float(row['confidence_score'] or 0.0),
+                    "created_at": row['created_at'].isoformat() if row['created_at'] else None
+                }
+                for row in method_result
+            ],
+            "total_adjustments": sum(row['count'] for row in adjustments_result),
+            "applied_adjustments": sum(row['applied_count'] for row in adjustments_result)
+        }
+
+    except Exception as e:
+        logger.error(f"API: Failed to get learning insights: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to get learning insights: {str(e)}")
