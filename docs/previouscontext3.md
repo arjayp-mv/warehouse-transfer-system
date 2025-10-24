@@ -1,143 +1,186 @@
-● V8.0 Phase 4: Reporting Dashboard - Completion Summary
+  Current Task
 
-  What Was Completed
+  Testing the V9.0 Supplier Ordering System using Playwright MCP, specifically completing end-to-end testing of the supplier ordering UI and      
+  API.
 
-  All 13 Tasks (TASK-556 to TASK-568) - 100% COMPLETE ✅
+  What Was Accomplished
 
-  Backend API Endpoints (4 new endpoints in backend/forecasting_api.py):
-  1. GET /api/forecasts/accuracy/summary - Lines 852-960
-    - Warehouse filtering (burnaby/kentucky/combined/all)
-    - Stockout exclusion toggle
-    - Returns: overall_mape, total_forecasts, completed_forecasts, by_abc_xyz breakdown, 6-month trend
-  2. GET /api/forecasts/accuracy/sku/{sku_id} - Lines 963-1045
-    - Returns 24 months of accuracy history per SKU
-    - Includes: avg_mape, avg_bias, monthly records with predictions vs actuals
-  3. GET /api/forecasts/accuracy/problems - Lines 1048-1088
-    - Calls identify_problem_skus() from Phase 3 learning module
-    - Parameters: mape_threshold (default 30%), limit (max 100)
-    - Returns: Problem SKUs with diagnostic recommendations
-  4. GET /api/forecasts/accuracy/learning-insights - Lines 1091-1196
-    - Returns recent learning adjustments (90-day window)
-    - Includes: growth adjustments, method recommendations, adjustment counts
+  1. Fixed Database Connection Pattern (COMPLETED)
 
-  Frontend Dashboard (frontend/forecast-accuracy.html - 380 lines):
-  - Complete dashboard with inline JavaScript (no separate .js file needed)
-  - Bootstrap 5 + Chart.js + DataTables + Font Awesome
-  - Features:
-    - Warehouse filter dropdown (All/Burnaby/Kentucky/Combined)
-    - Stockout exclusion checkbox (checked by default)
-    - 4 metric cards (Overall MAPE, Total Forecasts, Completed, Stockouts Excluded)
-    - MAPE trend line chart (6-month Chart.js visualization)
-    - ABC/XYZ heatmap bar chart (color-coded: Green <15%, Yellow 15-30%, Red >30%)
-    - Problem SKUs DataTables (25 rows/page, sorting, searching, threshold filter)
-    - Loading spinner, error handling, chart memory management
+  Problem: The supplier ordering API was written using SQLAlchemy ORM pattern (from database import get_db, Session, text(), :param style) but    
+   the project uses direct PyMySQL connections.
 
-  Navigation Integration:
-  - Updated frontend/index.html (line 324-326)
-  - Added "Forecast Accuracy" link in Quick Actions section
-  - Positioned between "12-Month Forecasting" and "Data Management"
+  Files Fixed:
+  - backend/supplier_ordering_api.py (518 lines) - Completely refactored
+  - backend/supplier_ordering_queries.py (160 lines) - Converted from SQLAlchemy to plain SQL
 
-  Testing:
-  - All 4 API endpoints tested with curl - return 200 OK
-  - Playwright MCP testing passed:
-    - Page loads correctly (only harmless favicon 404)
-    - All metric cards display (0 values expected - waiting for accuracy data)
-    - Charts render correctly (empty until Phase 2 accuracy update runs)
-    - DataTables initialized with "No problem SKUs found. Great job!" message
-    - Filters functional (warehouse dropdown, stockout toggle)
-    - Navigation works (main dashboard → forecast accuracy page)
+  Changes Made:
+  - Changed imports from from database import get_db to from backend.database import execute_query
+  - Removed all SQLAlchemy imports (Session, text(), Depends(get_db))
+  - Removed dependency injection pattern from all 7 endpoints
+  - Changed parameterized query format from :param_name to %s
+  - Changed params from dict to tuple format
+  - Changed execute_query calls from fetch_mode='one' to fetch_one=True, fetch_all=False
+  - Changed execute_query calls from fetch_mode='all' to fetch_one=False, fetch_all=True
+  - Changed execute_query calls from fetch_mode='none' to fetch_one=False, fetch_all=False
+  - Removed all db.commit() calls (execute_query handles commits automatically)
 
-  Documentation:
-  - Updated docs/TASKS.md (lines 1398-1572)
-  - Marked all Phase 4 tasks complete with implementation details
-  - Added Phase 4 completion summary with technical achievements
-  - Added TASK-569 refactoring plan for future work
+  2. Fixed Column Name Mismatch (COMPLETED)
 
-  CRITICAL ISSUE - Technical Debt
+  Problem: Queries referenced s.unit_cost but the actual column name in the skus table is cost_per_unit.
 
-  ⚠️ backend/forecasting_api.py is now 1,196 lines (exceeds 500-line max from claude-code-best-practices.md)
+  Files Fixed:
+  - backend/supplier_ordering_queries.py - All 3 queries (build_orders_query, stats_query, supplier_query)
+  - backend/supplier_ordering_api.py - generate_recommendations endpoint
 
-  Root cause: Added 347 lines of Phase 4 endpoints to already-large file (849 lines before)
-
-  Impact: Not blocking - all endpoints work correctly, but violates best practices
-
-  Solution documented (TASK-569 in TASKS.md, lines 1513-1571):
-  - Split into 3 modular routers under backend/routers/:
-    - forecast_generation.py (~200 lines) - POST /generate, GET /queue, DELETE /queue/{run_id}
-    - forecast_runs.py (~300 lines) - GET /runs, results, export, cancel, historical
-    - forecast_accuracy.py (~350 lines) - Phase 2 & Phase 4 accuracy endpoints
-  - Update forecasting_api.py to main router aggregator (~50 lines)
-  - Estimated effort: 1-2 hours
-  - Priority: Medium (implement after Phase 4 validation in production)
+  Changes Made:
+  - Changed all references from s.unit_cost to s.cost_per_unit
+  - Changed all references from s.unit_cost in calculations to s.cost_per_unit
 
   What Still Needs to Be Done
 
-  Immediate (Nothing Blocking)
+  1. CRITICAL: Server Reload Required
 
-  ✅ Phase 4 is production-ready and fully functional
+  The server detected file changes and started reloading but the reload may not have completed. You need to:
 
-  To Populate Dashboard with Real Data
+  Action: Check if server reload completed successfully by looking for this line in server logs:
+  INFO - Supplier ordering API routes loaded successfully
 
-  The dashboard currently shows 0 values because Phase 2 accuracy update hasn't been run yet:
+  If not present, restart the server manually:
+  cd "C:\Users\Arjay\Downloads\warehouse-transfer"
+  python -m uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload
 
-  1. Generate forecasts (if not already done):
-  POST /api/forecasts/generate
-  2. Run Phase 2 accuracy update to compare forecasts vs actuals:
-  POST /api/forecasts/accuracy/update?target_month=2025-09
-  2. Or use scheduler script:
-  python backend/run_monthly_accuracy_update.py --month 2025-09
-  3. Dashboard will populate automatically with:
-    - Actual MAPE values in metric cards
-    - 6-month trend data in line chart
-    - ABC/XYZ breakdown in heatmap
-    - Problem SKUs in DataTables (if any exceed threshold)
+  2. Test the API Endpoint
 
-  Future Work (Phase 5 - Deferred)
+  Once server is running, refresh the Playwright browser at:
+  http://localhost:8000/static/supplier-ordering.html
 
-  - TASK-569: Refactor forecasting_api.py into modular routers (technical debt)
-  - TASK-570+: Phase 5 advanced features (real-time triggers, automation, email alerts)
+  Expected Result: Page should load without the "Unable to load order recommendations" alert.
 
-  Key Files Modified
+  Current Status: Last API call returned 500 error with "Unknown column 's.unit_cost'" but this was BEFORE the latest fixes were applied.
 
-  Created:
-  - frontend/forecast-accuracy.html (380 lines)
+  3. Complete Playwright Testing Checklist
 
-  Modified:
-  - backend/forecasting_api.py (added lines 852-1196, now 1,196 total)
-  - frontend/index.html (added lines 324-326 for navigation link)
-  - docs/TASKS.md (updated lines 1398-1572 with completion status)
+  Once the API works, complete these tests using Playwright MCP:
 
-  Current System State
+  Basic UI Tests:
 
-  - Server: Running on port 8000 (background process ID: 12c7d1)
-  - All endpoints: Functional and tested
-  - Dashboard: Accessible at http://localhost:8000/static/forecast-accuracy.html
-  - Waiting for: Phase 2 accuracy update to populate with real data
+  - Page loads successfully ✓ (completed)
+  - Page structure displays correctly ✓ (completed)
+  - API call succeeds without errors
+  - Summary cards display data (instead of "--")
+  - Filter dropdowns populate
+  - DataTable displays order rows
 
-  Production Readiness
+  Generate Recommendations Test:
 
-  ✅ Phase 4 is production ready:
-  - All 13 tasks complete
-  - Comprehensive error handling
-  - Performance targets met (sub-2-second page loads)
-  - Playwright testing passed
-  - File size limits respected (frontend: 380 lines)
-  - Known issue (backend file size) documented with clear refactoring plan
+  - Click "Generate Recommendations" button
+  - Verify loading overlay appears
+  - Verify API POST to /api/supplier-orders/generate succeeds
+  - Verify summary cards update with counts
+  - Verify table populates with data
 
-  Next Steps for New Claude Instance
+  Filter Tests:
 
-  Option 1: Deploy Phase 4 to production and monitor
-  - Run accuracy update to populate dashboard
-  - Gather user feedback
-  - Monitor performance with real data
+  - Test warehouse filter dropdown
+  - Test supplier filter dropdown
+  - Test urgency level filter dropdown
+  - Test SKU search box
 
-  Option 2: Address technical debt (TASK-569)
-  - Refactor forecasting_api.py into modular routers
-  - Reduces file from 1,196 → all files under 500 lines
-  - Follow plan in docs/TASKS.md lines 1513-1571
+  Inline Editing Tests:
 
-  Option 3: Continue with Phase 5
-  - Advanced features (real-time triggers, automation)
-  - Requires Phase 4 validation first
+  - Click and edit confirmed_qty field
+  - Verify auto-save after 500ms
+  - Test lead_time_days_override editing
+  - Test expected_arrival_override date picker
+  - Test notes field editing
 
-  Recommended: Option 1 (deploy & validate) → Option 2 (refactor) → Option 3 (Phase 5)
+  Lock/Unlock Tests:
+
+  - Click lock button on an order
+  - Verify lock icon changes state
+  - Verify editable fields become disabled
+  - Click unlock button
+  - Verify fields become editable again
+
+  SKU Details Modal Tests:
+
+  - Click SKU link to open modal
+  - Verify Overview tab displays
+  - Click Pending Orders tab
+  - Click 12-Month Forecast tab
+  - Click Stockout History tab
+  - Test modal close functionality
+
+  Excel Export Test:
+
+  - Click "Export to Excel" button
+  - Verify file download triggers
+  - Verify success message appears
+
+  4. Document Test Results
+
+  After testing, update the todo list using TodoWrite tool to mark tasks as completed.
+
+  Current Todo List Status
+
+  1. [in_progress] Test supplier ordering UI components (filters, table, modal structure)
+  2. [completed] Fix supplier_ordering_api.py database imports (use execute_query instead of get_db)
+  3. [in_progress] Test API endpoints after fixing imports
+  4. [pending] Test end-to-end workflow (generate, edit, lock, export)
+
+  Key Technical Details
+
+  Database Connection Pattern (CORRECT)
+
+  from backend.database import execute_query
+
+  # For single row:
+  result = execute_query(query, (param1, param2), fetch_one=True, fetch_all=False)
+
+  # For multiple rows:
+  results = execute_query(query, (param1, param2), fetch_one=False, fetch_all=True)
+
+  # For INSERT/UPDATE/DELETE:
+  execute_query(query, (param1, param2), fetch_one=False, fetch_all=False)
+
+  Query Parameter Format (CORRECT)
+
+  # Use %s placeholders
+  query = "SELECT * FROM table WHERE id = %s AND name = %s"
+  params = (123, "test")  # Tuple, not dict
+
+  # NOT this:
+  query = "SELECT * FROM table WHERE id = :id AND name = :name"  # WRONG
+  params = {"id": 123, "name": "test"}  # WRONG
+
+  Column Names (CORRECT)
+
+  - Use s.cost_per_unit NOT s.unit_cost
+  - Table: skus, Column: cost_per_unit
+
+  Files Modified
+
+  1. backend/supplier_ordering_api.py - 518 lines, completely refactored
+  2. backend/supplier_ordering_queries.py - 160 lines, removed SQLAlchemy, fixed column names
+  3. No frontend changes needed - the issue was entirely backend
+
+  Server Information
+
+  - Running on: http://localhost:8000
+  - Test Page: http://localhost:8000/static/supplier-ordering.html
+  - Background Bash ID: cb0619 (may have multiple old IDs: e65a05, da4779, 179282)
+
+  Next Immediate Steps
+
+  1. Check server reload status
+  2. Refresh browser page
+  3. Check console for errors
+  4. If API works: Begin systematic Playwright testing
+  5. If API fails: Check server logs for specific error and fix
+
+  Known Good State
+
+  - Server loads supplier ordering API module successfully
+  - Page structure renders correctly
+  - Issue is database query execution, which should now be fixed pending server reload

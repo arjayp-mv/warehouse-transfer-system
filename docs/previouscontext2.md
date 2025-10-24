@@ -1,229 +1,234 @@
+
   What Was Completed
 
-  V8.0 Forecast Learning & Accuracy System - Phase 2 (TASK-532 to TASK-538)
+  TASK-381: Supplier Lead Time Management API
+
+  Just completed implementation of supplier lead time management API endpoints.
+
+  Files Created/Modified:
+
+  1. backend/supplier_management_api.py (347 lines)
+    - Created new API module with 3 endpoints under /api/suppliers
+    - PUT /api/suppliers/{supplier}/lead-time - Updates P95 lead time for all SKUs from a supplier
+    - GET /api/suppliers/{supplier}/lead-time-history - Returns historical statistics with optional seasonal/trend analysis
+    - GET /api/suppliers/{supplier}/performance-alerts - Detects performance degradation alerts
+  2. backend/main.py (lines 119-127)
+    - Registered supplier_management_api router
+    - Added try/except block for graceful error handling
+  3. database/migrations/add_supplier_lead_time_history.sql (new migration)
+    - Created audit trail table for tracking lead time changes
+    - Fields: id, supplier, old_p95_lead_time, new_p95_lead_time, updated_by, notes, updated_at
+    - Indexes: PRIMARY on id, composite on (supplier, updated_at), single on updated_at
+    - Successfully executed migration and verified table exists
 
-  Status: ALL COMPLETED ✓ - Production Ready
+  Key Implementation Details:
+
+  Cascade Update Logic:
+  - When supplier lead time is updated via PUT endpoint, it updates:
+    a. supplier_lead_times table (main cache)
+    b. ALL supplier_order_confirmations records for that supplier WHERE lead_time_days_override IS NULL
+    c. Preserves user-defined overrides (doesn't touch records with manual lead_time_days_override)
+    d. Logs change to supplier_lead_time_history for audit trail
 
-  Context: Building a self-improving forecasting system that tracks prediction accuracy, compares to actual sales, and will        
-  eventually learn from errors to improve future forecasts.
+  Integration with Analytics:
+  - Uses existing SupplierAnalytics class from supplier_analytics.py (980 lines, untouched)
+  - Analytics provides: statistical metrics, reliability scoring, seasonal patterns, performance trends
+  - Optional parameters: include_seasonal and include_trends for deeper analysis
+
+  Pydantic Models:
+  - UpdateLeadTimeRequest - Validates P95 input (1-365 days), requires username
+  - UpdateLeadTimeResponse - Returns affected SKU/order counts
+  - LeadTimeHistoryResponse - Comprehensive statistics response
 
-  ---
-  Phase 2 Deliverables (All Complete)
-
-  1. TASK-532: Scheduler Script
-
-  File: backend/run_monthly_accuracy_update.py (95 lines)
-  - Standalone script for manual or scheduled accuracy updates
-  - Can be run: python backend/run_monthly_accuracy_update.py [--month YYYY-MM]
-  - Dual logging (console + file)
-  - Optional Windows Task Scheduler / cron automation
-
-  2. TASK-533: API Endpoint
+  Previously Completed Tasks (V9.0 Phase 1-3)
 
-  File: backend/forecasting_api.py (lines 776-848)
-  - Endpoint: POST /api/forecasts/accuracy/update?target_month=YYYY-MM
-  - Enables UI-based manual triggering (no scheduler needed)
-  - Returns: total_forecasts, actuals_found, avg_mape, stockout_affected_count
+  TASK-378: Database Schema ✅
 
-  3. TASK-535: End-to-End Test Script
+  - Created supplier_order_confirmations table with 31 fields
+  - Supports monthly ordering cycle, time-phased pending, urgency levels, locking mechanism
+  - Migration file: database/migrations/add_supplier_order_confirmations.sql
 
-  File: backend/test_accuracy_update.py (258 lines)
-  - Tests before/after database states
-  - Validates delta calculations
-  - Displays sample accurate/inaccurate forecasts
-  - Fixed Issues: MySQL reserved word year_month (requires backticks), Unicode encoding for Windows console
+  TASK-379: Core Calculations Engine ✅
 
-  4. TASK-536: MAPE Verification with Stockout Logic
+  - Created backend/supplier_ordering_calculations.py (573 lines)
+  - Key function: generate_monthly_recommendations(db, order_month)
+  - Implements: stockout-corrected demand, time-phased pending with confidence scoring, dynamic safety stock, urgency classification
+  (must/should/optional/skip)
 
-  File: backend/test_mape_stockout_logic.py (556 lines)
-  - Tests 3 scenarios:
-    - Case 1: No stockout → MAPE=11.11%, included in avg
-    - Case 2: Stockout + undersales → MAPE=66.67%, excluded from avg
-    - Case 3: Stockout + oversales → MAPE=16.67%, included in avg
-  - CRITICAL BUG FOUND & FIXED: backend/forecast_accuracy.py lines 431-471
-    - Bug: Parameter mismatch in execute_query call (5 placeholders but 6 parameters passed)
-    - Fix: Split into two branches with correct parameter counts
+  TASK-380: API Endpoints ✅
 
-  5. TASK-537: Performance Testing
+  - Created 3 files (refactored for size compliance):
+    - backend/supplier_ordering_api.py (461 lines) - Main API handlers
+    - backend/supplier_ordering_models.py (61 lines) - Pydantic models
+    - backend/supplier_ordering_queries.py (164 lines) - SQL query builders
+  - 6 endpoints under /api/supplier-orders:
+    - POST /generate - Generate monthly recommendations
+    - GET /{order_month} - Paginated list with filters
+    - PUT /{order_id} - Update order quantities/overrides
+    - POST /{order_id}/lock - Lock order from editing
+    - POST /{order_id}/unlock - Unlock order
+    - GET /{order_month}/summary - Statistics summary
 
-  File: backend/test_performance_accuracy.py (570 lines)
-  - Tested: 1,765 SKUs (99.8% of 1,768 target)
-  - Result: 4.76 seconds (12.6x faster than 60s target)
-  - Time per SKU: 2.70ms
-  - Projected capacity: 22,000+ SKUs within 60s window
+  Current Status
 
-  File: docs/PERFORMANCE_ANALYSIS_V8.md (450 lines)
-  - Detailed performance analysis
-  - Important Finding: idx_period_recorded composite index already exists in database
-    - EXPLAIN showed table scan during testing because table was empty
-    - Verified with actual data: index is used correctly (type: ref, key: idx_period_recorded)
-    - Location: database/schema.sql line 104
+  All backend API work for V9.0 Phase 1-3 is COMPLETE.
 
-  6. TASK-538: Documentation
+  No dependencies needed in requirements.txt (all using fastapi, sqlalchemy, pydantic which already exist).
 
-  Updated Files:
-  - docs/PERFORMANCE_ANALYSIS_V8.md - Corrected index status (already exists, functioning)
-  - docs/TASKS.md - Marked TASK-535 to TASK-538 complete, added Phase 2 completion summary
+  What Still Needs to Be Done (V9.0 Remaining Tasks)
 
-  ---
-  System Architecture Summary
+  TASK-382: Build supplier ordering frontend page (supplier-ordering.html)
 
-  Database Tables
+  Estimated: 2 hours
 
-  1. forecast_accuracy - Stores predictions for later comparison
-    - Columns: sku_id, warehouse, predicted_demand, actual_demand, absolute_percentage_error, stockout_affected,
-  is_actual_recorded
-    - Index: idx_period_recorded (forecast_period_start, is_actual_recorded) ✓ EXISTS
-  2. monthly_sales - Actual sales data with corrected_demand columns (stockout-adjusted)
-  3. stockout_dates - Tracks stockout days per SKU/warehouse
+  Create main UI page with:
+  - DataTables for paginated order list
+  - Filter controls (warehouse, supplier, urgency, search)
+  - Summary cards showing totals by urgency level
+  - Month selector for viewing different order periods
+  - Buttons: Generate Recommendations, Export to Excel
+  - Integration with existing navbar (add link in all pages)
 
-  Key Logic: Stockout-Aware MAPE
+  Reference existing pages:
+  - frontend/transfer-planning.html - DataTables pattern
+  - frontend/sku-listing.html - Filter controls pattern
+  - frontend/index.html - Summary cards pattern
 
-  Critical Business Rule:
-  - If stockout_affected = TRUE AND actual < predicted → EXCLUDE from avg_mape calculation
-    - Reason: Low sales due to supply failure, not forecast error
-  - If stockout_affected = TRUE AND actual > predicted → INCLUDE in avg_mape calculation
-    - Reason: We under-forecasted true demand (forecast error)
+  TASK-383: Implement JavaScript logic (supplier-ordering.js)
 
-  Implementation: backend/forecast_accuracy.py function update_monthly_accuracy()
+  Estimated: 2 hours
 
-  ---
-  What Still Needs to Be Done
+  Create JS module with:
+  - API calls to all 6 endpoints from supplier_ordering_api.py
+  - Inline editing for confirmed_qty, lead_time_days_override, notes
+  - Lock/unlock workflow with username prompt
+  - Real-time recalculation of order values
+  - Filter state management
+  - Export button handler
+  - Error handling and user feedback
 
-  Phase 3: Multi-Dimensional Learning (TASK-539 to TASK-555)
+  Pattern to follow: frontend/js/transfer-planning.js for DataTables + API integration
 
-  Status: NOT STARTED
+  TASK-384: Enhanced SKU details modal
 
-  Objective: Implement intelligent learning algorithms that auto-adjust forecasting parameters based on accuracy patterns.
+  Estimated: 1 hour
 
-  Key Tasks:
-  1. TASK-539 to TASK-541: Create backend/forecast_learning.py module
-    - ForecastLearningEngine class
-    - ABC/XYZ-specific learning rates (AX: 0.02 careful, CZ: 0.10 aggressive)
-  2. TASK-542 to TASK-544: Growth adjustment learning
-    - Analyze forecast bias patterns
-    - Auto-adjust growth rates based on accuracy
-    - Growth status awareness (viral/declining/normal)
-  3. TASK-545 to TASK-547: Seasonal factor learning
-    - Identify systematic seasonal errors
-    - Auto-tune seasonal factors
-    - Category-level fallback for new SKUs
-  4. TASK-548 to TASK-550: Method effectiveness learning
-    - Track which forecasting methods work best per SKU type
-    - Auto-switch to better-performing methods
-  5. TASK-551 to TASK-555: Testing, integration, documentation
+  Create modal showing:
+  - Current inventory position
+  - Pending orders timeline (visual timeline with confidence indicators)
+  - 12-month forecast chart (from forecast_details table)
+  - Order history for this SKU
+  - Trigger: Click on SKU ID in main table
 
-  Estimated Effort: 10-12 hours
+  Dependencies:
+  - Chart.js (already in project)
+  - Bootstrap modal (already in project)
 
-  ---
-  Important Files & Locations
+  TASK-385: Monthly recommendations background job
 
-  Core Accuracy Tracking
+  Estimated: 30 minutes
 
-  - backend/forecast_accuracy.py - Main accuracy tracking module (lines 230-498: update_monthly_accuracy function)
-  - backend/forecasting_api.py - API endpoint (lines 776-848)
-  - backend/run_monthly_accuracy_update.py - Scheduler script
+  Add scheduler to auto-generate recommendations:
+  - Create backend/scheduler.py using APScheduler
+  - Schedule job for 1st of each month at 6 AM
+  - Calls generate_monthly_recommendations() for current month
+  - Logs results
+  - Register scheduler in main.py startup event
 
-  Test Suite
+  TASK-386: Enhance pending order import
 
-  - backend/test_accuracy_update.py - End-to-end workflow test
-  - backend/test_mape_stockout_logic.py - MAPE verification with 3 test cases
-  - backend/test_performance_accuracy.py - Performance testing framework
+  Estimated: 1 hour
 
-  Documentation
+  Update backend/import_export.py pending orders import:
+  - Currently overwrites supplier estimates with statistical P95
+  - Need to preserve supplier_estimated_arrival as separate field
+  - Use statistical expected_arrival for planning calculations
+  - Add UI toggle to show both dates
+  - Update pending_orders table schema if needed
 
-  - docs/PERFORMANCE_ANALYSIS_V8.md - Performance analysis and scalability
-  - docs/TASKS.md - Project task tracker (V8.0 starts at line 885)
-  - docs/FORECAST_LEARNING_ENHANCED_PLAN.md - Overall V8.0 feature plan
+  TASK-387: Excel export with grouped supplier data
 
-  Database
+  Estimated: 2 hours
 
-  - database/schema.sql - Line 104: idx_period_recorded index
-  - database/add_forecast_learning_schema.sql - Migration script for V8.0 tables
+  Create export endpoint:
+  - Group orders by supplier
+  - Include editable fields: confirmed_qty, lead_time_days_override, notes
+  - Summary row per supplier (totals, must_order count)
+  - Color-coded urgency levels
+  - Use openpyxl library (already in requirements.txt)
+  - Endpoint: GET /api/supplier-orders/{order_month}/export
 
-  ---
-  Known Issues / Important Notes
+  TASK-388: Playwright test suite
 
-  FIXED Issues (No Action Needed)
+  Estimated: 4 hours
 
-  1. ✅ MySQL reserved word: year_month requires backticks in queries
-  2. ✅ Parameter mismatch bug in forecast_accuracy.py (lines 431-471) - FIXED
-  3. ✅ Unicode encoding issues on Windows console - FIXED (removed emoji symbols)
+  Create tests/supplier_ordering_test.py:
+  - Test recommendation generation (accuracy of calculations)
+  - Test pagination and filtering
+  - Test inline editing workflow
+  - Test lock/unlock functionality
+  - Test performance with 4000+ SKUs
+  - Visual regression tests for UI
 
-  Performance Notes
+  MUST use Playwright MCP tools as per CLAUDE.md instructions
 
-  - System handles 1,765 SKUs in 4.76s (excellent)
-  - Linear scaling: 2.70ms per SKU
-  - No optimizations needed unless processing 10,000+ SKUs regularly
-  - If needed: Batch stockout checks (N+1 query pattern is primary bottleneck)
+  TASK-389: User documentation
 
-  Production Readiness
+  Estimated: 1 hour
 
-  STATUS: READY FOR DEPLOYMENT ✓
-  - All Phase 2 tasks complete
-  - Performance validated
-  - Database optimized (indexes exist)
-  - Comprehensive testing done
-  - No blocking issues
+  Create docs/SUPPLIER_ORDERING_USER_GUIDE.md:
+  - Overview of monthly ordering process
+  - How to generate recommendations
+  - Understanding urgency levels
+  - Editing quantities and lead times
+  - Locking confirmed orders
+  - Exporting to Excel
+  - Troubleshooting common issues
 
-  ---
-  Recommended Next Steps
+  TASK-390: API documentation
 
-  Option 1: Continue with Phase 3 (Learning Algorithms)
+  Estimated: 30 minutes
 
-  Start TASK-539: Create backend/forecast_learning.py module
+  Update docs/API.md or create docs/SUPPLIER_ORDERING_API.md:
+  - Document all 6 supplier_ordering_api endpoints
+  - Document 3 supplier_management_api endpoints
+  - Request/response examples
+  - Error codes and handling
+  - FastAPI auto-generates OpenAPI docs at /api/docs (already working)
 
-  Option 2: Deploy Phase 2 First
+  Important Notes
 
-  1. Run accuracy update on real forecast/sales data
-  2. Validate MAPE calculations with production data
-  3. Monitor performance with full dataset
-  4. Then proceed to Phase 3
+  File Size Best Practices
 
-  Option 3: Build UI Trigger
+  - Maximum 500 lines per file (warning at 400+)
+  - TASK-380 was initially 606 lines, refactored into 3 files
+  - Always check file size before completing tasks
 
-  Create simple button in dashboard to call POST /api/forecasts/accuracy/update
+  Database Tables Created
 
-  ---
-  Git Status
+  1. supplier_order_confirmations (main ordering table)
+  2. supplier_lead_time_history (audit trail)
 
-  Last Commit: 1529dd3 - "docs: V8.0 Phase 2 completion - TASK-537 & TASK-538"
-  Branch: master
-  Remote: https://github.com/arjayp-mv/warehouse-transfer-system.git
-  Status: Clean working directory, all changes pushed
+  Existing Tables Used
 
-  ---
-  Quick Start Commands
+  1. supplier_lead_times (cache table for analytics)
+  2. supplier_shipments (historical data)
+  3. skus (inventory master data)
+  4. forecast_details (12-month forecasts)
+  5. pending_orders (inbound inventory)
 
-  Run Accuracy Update Manually
+  Frontend Access
 
-  python backend/run_monthly_accuracy_update.py --month 2025-09
+  - Development server: http://localhost:8000
+  - Use run_dev.bat to start server (never manual uvicorn)
+  - Static files at /static/ route
 
-  Run Test Suite
+  No Emojis Policy
 
-  python backend/test_accuracy_update.py
-  python backend/test_mape_stockout_logic.py
-  python backend/test_performance_accuracy.py
+  Per CLAUDE.md: "DO NOT CODE WITH EMOJIS!" - Enforce in all files
 
-  Check Database Index
+  Ready to Continue
 
-  SHOW INDEX FROM forecast_accuracy WHERE Key_name = 'idx_period_recorded';
+  Next task should be TASK-382: Build supplier ordering frontend page (supplier-ordering.html)
 
-  API Endpoint Test
-
-  curl -X POST "http://localhost:8000/api/forecasts/accuracy/update?target_month=2025-09"
-
-  ---
-  Context for Next Session
-
-  Current State: V8.0 Phase 2 complete, production-ready accuracy tracking system operational
-
-  What Works:
-  - Forecast recording when forecasts are generated
-  - Monthly accuracy updates with stockout-aware MAPE calculation
-  - Manual API trigger for accuracy updates
-  - Comprehensive test suite validating all logic
-
-  What's Next: Phase 3 learning algorithms to auto-tune forecasting parameters based on accuracy patterns
-
-  No Blockers: System is fully functional and ready for either Phase 3 development or production deployment
+  Total remaining: ~15 hours across 9 tasks (382-390)

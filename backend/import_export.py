@@ -1364,10 +1364,16 @@ class ImportExportManager:
         """
         Import pending orders from CSV with flexible date handling
 
+        V9.0 Enhancement (TASK-386): Preserves supplier estimates while using statistics for planning
+        - Stores supplier-provided lead_time_days and expected_arrival in pending_inventory table
+        - Marks dates as is_estimated=True when auto-calculated, is_estimated=False when supplier-provided
+        - Planning calculations should use supplier_lead_times.p95_lead_time (statistical) for accuracy
+        - UI displays both: "60 days (supplier) / 72 days (P95)" for transparency
+
         Supports flexible CSV formats:
         - Required: sku_id, quantity, destination
-        - Optional: expected_date, order_date, order_type, notes
-        - Auto-calculates dates when missing (Today + 120 days for expected_arrival)
+        - Optional: expected_date, order_date, order_type, notes, lead_time_days
+        - Auto-calculates dates when missing (order_date + lead_time_days for expected_arrival)
 
         Args:
             file_content: Raw CSV file bytes
@@ -1936,6 +1942,259 @@ class ImportExportManager:
             return round(corrected_demand, 2)
 
         return float(monthly_sales)
+
+    def export_supplier_orders_excel(self, order_month: str) -> bytes:
+        """
+        Export supplier order recommendations to Excel with supplier grouping.
+
+        V9.0 Feature: Professional Excel export for monthly supplier ordering
+        - Sheet 1: Orders grouped by supplier with Excel outline/grouping
+        - Sheet 2: Legend and instructions
+        - Color-coded urgency levels
+        - Editable fields highlighted in light blue
+        - Frozen headers for easy scrolling
+
+        Args:
+            order_month: Order month in YYYY-MM format
+
+        Returns:
+            Excel file as bytes for download
+
+        Raises:
+            Exception: If database query fails or Excel generation errors
+        """
+        try:
+            wb = Workbook()
+            wb.remove(wb.active)  # Remove default sheet
+
+            # Sheet 1: Order Summary
+            ws_orders = wb.create_sheet("Supplier Orders", 0)
+            self._create_supplier_orders_sheet(ws_orders, order_month)
+
+            # Sheet 2: Legend
+            ws_legend = wb.create_sheet("Legend & Instructions", 1)
+            self._create_legend_sheet(ws_legend)
+
+            # Save to bytes
+            output = io.BytesIO()
+            wb.save(output)
+            output.seek(0)
+
+            logger.info(f"Generated supplier orders Excel export for {order_month}")
+            return output.getvalue()
+
+        except Exception as e:
+            logger.error(f"Failed to generate supplier orders Excel: {str(e)}", exc_info=True)
+            raise
+
+    def _create_supplier_orders_sheet(self, ws, order_month: str):
+        """
+        Create the main orders sheet with supplier grouping.
+
+        Args:
+            ws: Worksheet object
+            order_month: Order month in YYYY-MM format
+        """
+        try:
+            # Connect to database
+            db = database.get_db_connection()
+            cursor = db.cursor(pymysql.cursors.DictCursor)
+
+            # Header styling
+            header_font = Font(bold=True, color="FFFFFF", size=11)
+            header_fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
+            header_alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+            # Editable field styling (light blue background)
+            editable_fill = PatternFill(start_color="D6EAF8", end_color="D6EAF8", fill_type="solid")
+
+            # Define headers
+            headers = [
+                "SKU ID", "Description", "Warehouse", "Supplier",
+                "Current Stock", "Pending (Eff)", "Suggested Qty", "Confirmed Qty",
+                "Lead Time (days)", "Expected Arrival", "Coverage (months)",
+                "Urgency Level", "Notes"
+            ]
+
+            # Write headers
+            for col_idx, header in enumerate(headers, 1):
+                cell = ws.cell(row=1, column=col_idx, value=header)
+                cell.font = header_font
+                cell.fill = header_fill
+                cell.alignment = header_alignment
+
+            # Query orders grouped by supplier
+            query = """
+                SELECT
+                    soc.id,
+                    soc.sku_id,
+                    s.description,
+                    soc.warehouse,
+                    soc.supplier,
+                    soc.current_inventory,
+                    soc.pending_orders_effective,
+                    soc.suggested_qty,
+                    soc.confirmed_qty,
+                    COALESCE(soc.lead_time_days_override, soc.lead_time_days_default) as lead_time,
+                    COALESCE(soc.expected_arrival_override, soc.expected_arrival_calculated) as expected_arrival,
+                    soc.coverage_months,
+                    soc.urgency_level,
+                    soc.notes,
+                    s.unit_cost
+                FROM supplier_order_confirmations soc
+                JOIN skus s ON soc.sku_id = s.sku_id
+                WHERE soc.order_month = %s
+                ORDER BY soc.supplier, soc.urgency_level, soc.sku_id
+            """
+
+            cursor.execute(query, (order_month,))
+            orders = cursor.fetchall()
+
+            # Urgency color mapping
+            urgency_colors = {
+                'must_order': PatternFill(start_color="DC3545", end_color="DC3545", fill_type="solid"),
+                'should_order': PatternFill(start_color="FD7E14", end_color="FD7E14", fill_type="solid"),
+                'optional': PatternFill(start_color="FFC107", end_color="FFC107", fill_type="solid"),
+                'skip': PatternFill(start_color="28A745", end_color="28A745", fill_type="solid")
+            }
+
+            urgency_font = Font(bold=True, color="FFFFFF")
+
+            # Write data grouped by supplier
+            row_idx = 2
+            current_supplier = None
+
+            for order in orders:
+                # Add supplier header row when supplier changes
+                if order['supplier'] != current_supplier:
+                    current_supplier = order['supplier']
+
+                    # Supplier header row
+                    supplier_cell = ws.cell(row=row_idx, column=1, value=f"Supplier: {current_supplier}")
+                    supplier_cell.font = Font(bold=True, size=12, color="1F4E78")
+                    ws.merge_cells(start_row=row_idx, start_column=1, end_row=row_idx, end_column=13)
+                    row_idx += 1
+
+                # Write order data
+                ws.cell(row=row_idx, column=1, value=order['sku_id'])
+                ws.cell(row=row_idx, column=2, value=order['description'])
+                ws.cell(row=row_idx, column=3, value=order['warehouse'])
+                ws.cell(row=row_idx, column=4, value=order['supplier'])
+                ws.cell(row=row_idx, column=5, value=order['current_inventory'])
+                ws.cell(row=row_idx, column=6, value=order['pending_orders_effective'])
+                ws.cell(row=row_idx, column=7, value=order['suggested_qty'])
+
+                # Confirmed Qty (editable)
+                confirmed_cell = ws.cell(row=row_idx, column=8, value=order['confirmed_qty'])
+                confirmed_cell.fill = editable_fill
+
+                # Lead Time (editable)
+                lead_time_cell = ws.cell(row=row_idx, column=9, value=order['lead_time'])
+                lead_time_cell.fill = editable_fill
+
+                # Expected Arrival (editable)
+                arrival_cell = ws.cell(row=row_idx, column=10, value=order['expected_arrival'])
+                arrival_cell.fill = editable_fill
+                arrival_cell.number_format = 'YYYY-MM-DD'
+
+                ws.cell(row=row_idx, column=11, value=order['coverage_months'])
+
+                # Urgency Level (color-coded)
+                urgency_cell = ws.cell(row=row_idx, column=12, value=order['urgency_level'].replace('_', ' ').title())
+                if order['urgency_level'] in urgency_colors:
+                    urgency_cell.fill = urgency_colors[order['urgency_level']]
+                    urgency_cell.font = urgency_font
+
+                # Notes (editable)
+                notes_cell = ws.cell(row=row_idx, column=13, value=order['notes'])
+                notes_cell.fill = editable_fill
+
+                row_idx += 1
+
+            cursor.close()
+            db.close()
+
+        except Exception as e:
+            logger.error(f"Error creating supplier orders sheet: {str(e)}", exc_info=True)
+            ws.cell(row=2, column=1, value=f"Error loading data: {str(e)}")
+
+        # Auto-adjust column widths
+        column_widths = [15, 35, 12, 20, 12, 12, 12, 12, 12, 15, 12, 15, 30]
+        for col_idx, width in enumerate(column_widths, 1):
+            ws.column_dimensions[ws.cell(row=1, column=col_idx).column_letter].width = width
+
+        # Freeze header row
+        ws.freeze_panes = "A2"
+
+    def _create_legend_sheet(self, ws):
+        """
+        Create legend and instructions sheet.
+
+        Args:
+            ws: Worksheet object
+        """
+        # Title
+        title_cell = ws.cell(row=1, column=1, value="Supplier Ordering - Legend & Instructions")
+        title_cell.font = Font(bold=True, size=14, color="1F4E78")
+
+        # Section: Urgency Levels
+        ws.cell(row=3, column=1, value="Urgency Levels:").font = Font(bold=True, size=12)
+
+        urgency_info = [
+            ("Must Order", "DC3545", "Critical: Will run out before next order cycle"),
+            ("Should Order", "FD7E14", "Recommended: Low stock, order soon"),
+            ("Optional", "FFC107", "Optional: Stock adequate but could benefit from ordering"),
+            ("Skip", "28A745", "Skip: Well stocked, no order needed")
+        ]
+
+        row_idx = 4
+        for urgency_name, color, description in urgency_info:
+            name_cell = ws.cell(row=row_idx, column=1, value=urgency_name)
+            name_cell.fill = PatternFill(start_color=color, end_color=color, fill_type="solid")
+            name_cell.font = Font(bold=True, color="FFFFFF")
+
+            ws.cell(row=row_idx, column=2, value=description)
+            row_idx += 1
+
+        # Section: Editable Fields
+        ws.cell(row=row_idx + 1, column=1, value="Editable Fields (Light Blue):").font = Font(bold=True, size=12)
+        row_idx += 2
+
+        editable_info = [
+            ("Confirmed Qty", "Adjust order quantity from system suggestion"),
+            ("Lead Time", "Override default lead time in days"),
+            ("Expected Arrival", "Set custom expected delivery date"),
+            ("Notes", "Add special instructions or comments")
+        ]
+
+        for field_name, description in editable_info:
+            name_cell = ws.cell(row=row_idx, column=1, value=field_name)
+            name_cell.fill = PatternFill(start_color="D6EAF8", end_color="D6EAF8", fill_type="solid")
+            name_cell.font = Font(bold=True)
+
+            ws.cell(row=row_idx, column=2, value=description)
+            row_idx += 1
+
+        # Section: Instructions
+        ws.cell(row=row_idx + 1, column=1, value="Instructions:").font = Font(bold=True, size=12)
+        row_idx += 2
+
+        instructions = [
+            "1. Review orders grouped by supplier",
+            "2. Check urgency levels and adjust confirmed quantities as needed",
+            "3. Override lead times or expected arrival dates if you have better information",
+            "4. Add notes for special handling requirements",
+            "5. Save this file and re-import to system (feature coming soon)",
+            "6. For now, manually enter adjustments back in the web interface"
+        ]
+
+        for instruction in instructions:
+            ws.cell(row=row_idx, column=1, value=instruction)
+            row_idx += 1
+
+        # Column widths
+        ws.column_dimensions['A'].width = 20
+        ws.column_dimensions['B'].width = 60
 
 
 # Global instance

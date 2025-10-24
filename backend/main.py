@@ -106,6 +106,26 @@ except ImportError as e:
 except Exception as e:
     logger.error(f"Error setting up forecasting routes: {e}")
 
+# Setup Supplier Ordering API Routes (V9.0 monthly ordering system)
+try:
+    from backend.supplier_ordering_api import router as supplier_ordering_router
+    app.include_router(supplier_ordering_router)
+    logger.info("Supplier ordering API routes loaded successfully")
+except ImportError as e:
+    logger.warning(f"Supplier ordering module not available: {e}")
+except Exception as e:
+    logger.error(f"Error setting up supplier ordering routes: {e}")
+
+# Setup Supplier Management API Routes (supplier lead time management)
+try:
+    from backend.supplier_management_api import router as supplier_management_router
+    app.include_router(supplier_management_router)
+    logger.info("Supplier management API routes loaded successfully")
+except ImportError as e:
+    logger.warning(f"Supplier management module not available: {e}")
+except Exception as e:
+    logger.error(f"Error setting up supplier management routes: {e}")
+
 # =============================================================================
 # API ENDPOINTS - WAREHOUSE TRANSFER PLANNING TOOL
 # =============================================================================
@@ -5836,6 +5856,39 @@ async def dashboard_legacy():
         </body>
     </html>
     """
+
+
+# V9.0: Monthly Supplier Order Background Scheduler
+# Startup and shutdown event handlers for background jobs
+@app.on_event("startup")
+async def startup_event():
+    """
+    Application startup tasks.
+    Start the monthly supplier order recommendation scheduler.
+    """
+    try:
+        from backend.background_scheduler import start_scheduler
+        start_scheduler()
+        logger.info("Background schedulers started successfully")
+    except ImportError as e:
+        logger.warning(f"Background scheduler module not available: {e}")
+    except Exception as e:
+        logger.error(f"Error starting background schedulers: {e}")
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """
+    Application shutdown tasks.
+    Stop the monthly supplier order recommendation scheduler gracefully.
+    """
+    try:
+        from backend.background_scheduler import stop_scheduler
+        stop_scheduler()
+        logger.info("Background schedulers stopped successfully")
+    except Exception as e:
+        logger.error(f"Error stopping background schedulers: {e}")
+
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8003, reload=True)

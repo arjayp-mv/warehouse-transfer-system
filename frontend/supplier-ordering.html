@@ -1,0 +1,424 @@
+<!DOCTYPE html>
+<!--
+Warehouse Transfer Planning Tool - Supplier Ordering
+Monthly supplier ordering interface with intelligent recommendations
+Features: Order generation, inline editing, urgency levels, Excel export
+-->
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Supplier Ordering - Warehouse Transfer Tool</title>
+
+    <!-- Bootstrap CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <!-- Font Awesome -->
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <!-- DataTables CSS -->
+    <link href="https://cdn.datatables.net/1.13.6/css/dataTables.bootstrap5.min.css" rel="stylesheet">
+
+    <style>
+        /* Urgency level color coding */
+        .urgency-must-order {
+            background-color: #dc3545 !important;
+            color: white !important;
+            font-weight: bold;
+        }
+        .urgency-should-order {
+            background-color: #fd7e14 !important;
+            color: white !important;
+            font-weight: bold;
+        }
+        .urgency-optional {
+            background-color: #ffc107 !important;
+            color: black !important;
+        }
+        .urgency-skip {
+            background-color: #28a745 !important;
+            color: white !important;
+        }
+
+        /* Table styling */
+        .table th {
+            background-color: #f8f9fa;
+            border-top: 2px solid #dee2e6;
+            font-weight: 600;
+            font-size: 0.85rem;
+        }
+
+        /* Sticky table headers */
+        #orders-table thead {
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            background-color: #f8f9fa;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+
+        #orders-table thead th {
+            border-bottom: 2px solid #dee2e6;
+        }
+
+        /* Table wrapper with scrolling */
+        .table-responsive {
+            max-height: calc(100vh - 420px);
+            overflow-y: auto;
+            position: relative;
+        }
+
+        /* Editable fields */
+        .editable-qty {
+            width: 80px;
+            padding: 4px 8px;
+            border: 1px solid #ced4da;
+            border-radius: 4px;
+            text-align: center;
+        }
+
+        .editable-qty:focus {
+            border-color: #80bdff;
+            box-shadow: 0 0 0 0.2rem rgba(0, 123, 255, 0.25);
+            outline: 0;
+        }
+
+        .editable-date {
+            width: 120px;
+            padding: 4px 8px;
+            border: 1px solid #ced4da;
+            border-radius: 4px;
+            font-size: 0.85rem;
+        }
+
+        .editable-notes {
+            width: 150px;
+            padding: 4px 8px;
+            border: 1px solid #ced4da;
+            border-radius: 4px;
+            font-size: 0.85rem;
+        }
+
+        /* Lock button styling */
+        .lock-btn {
+            background: none;
+            border: none;
+            color: #6c757d;
+            font-size: 0.9em;
+            cursor: pointer;
+        }
+
+        .lock-btn:hover {
+            color: #28a745;
+        }
+
+        .lock-btn.locked {
+            color: #28a745;
+        }
+
+        /* Loading overlay */
+        .loading-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.5);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 9999;
+        }
+
+        .loading-content {
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            text-align: center;
+        }
+
+        /* Filter section */
+        .filters-section {
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+
+        /* Summary cards */
+        .summary-card {
+            border: none;
+            background: linear-gradient(135deg, #007bff, #0056b3);
+            color: white;
+        }
+
+        .summary-value {
+            font-size: 1.5rem;
+            font-weight: bold;
+        }
+
+        .summary-label {
+            font-size: 0.85rem;
+            opacity: 0.9;
+        }
+
+        /* SKU link */
+        .sku-link {
+            color: #007bff;
+            cursor: pointer;
+            text-decoration: underline;
+        }
+
+        .sku-link:hover {
+            color: #0056b3;
+        }
+
+        /* Responsive adjustments */
+        @media (max-width: 768px) {
+            .table-responsive {
+                font-size: 0.85rem;
+            }
+            .editable-qty {
+                width: 60px;
+            }
+        }
+    </style>
+</head>
+<body class="bg-light">
+    <!-- Loading Overlay -->
+    <div id="loading-overlay" class="loading-overlay" style="display: none;">
+        <div class="loading-content">
+            <div class="spinner-border text-primary mb-3" role="status">
+                <span class="visually-hidden">Loading...</span>
+            </div>
+            <h5 id="loading-message">Loading Supplier Orders...</h5>
+        </div>
+    </div>
+
+    <!-- Navigation -->
+    <nav class="navbar navbar-dark bg-primary">
+        <div class="container-fluid">
+            <div class="d-flex align-items-center">
+                <a href="index.html" class="btn btn-outline-light me-3">
+                    <i class="fas fa-arrow-left"></i> Dashboard
+                </a>
+                <span class="navbar-brand mb-0 h1">
+                    <i class="fas fa-dolly me-2"></i>Supplier Ordering
+                </span>
+            </div>
+            <div class="d-flex align-items-center">
+                <!-- Navigation Links -->
+                <a href="transfer-planning.html" class="btn btn-outline-light btn-sm me-2">
+                    <i class="fas fa-truck me-1"></i>Transfer Planning
+                </a>
+                <a href="forecasting.html" class="btn btn-outline-light btn-sm me-2">
+                    <i class="fas fa-chart-line me-1"></i>Forecasting
+                </a>
+                <a href="supplier-metrics.html" class="btn btn-outline-light btn-sm me-2">
+                    <i class="fas fa-chart-bar me-1"></i>Supplier Metrics
+                </a>
+
+                <!-- Export Button -->
+                <button class="btn btn-success btn-sm me-2" onclick="exportToExcel()">
+                    <i class="fas fa-file-excel me-1"></i>Export to Excel
+                </button>
+
+                <!-- Refresh Button -->
+                <button class="btn btn-outline-light btn-sm" onclick="loadOrderRecommendations()">
+                    <i class="fas fa-sync-alt me-1"></i>Refresh
+                </button>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Main Content -->
+    <div class="container-fluid mt-4">
+        <!-- Header Section -->
+        <div class="row mb-4">
+            <div class="col-md-6">
+                <label for="order-month-select" class="form-label fw-bold">Order Month</label>
+                <div class="input-group">
+                    <input type="month" id="order-month-select" class="form-control" />
+                    <button class="btn btn-primary" onclick="generateRecommendations()">
+                        <i class="fas fa-cog me-1"></i>Generate Recommendations
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Summary Cards -->
+        <div class="row mb-4">
+            <div class="col-md-3">
+                <div class="card bg-danger text-white">
+                    <div class="card-body text-center">
+                        <div id="must-order-count" class="summary-value">--</div>
+                        <div class="summary-label">Must Order</div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card bg-warning text-dark">
+                    <div class="card-body text-center">
+                        <div id="should-order-count" class="summary-value">--</div>
+                        <div class="summary-label">Should Order</div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card bg-info text-white">
+                    <div class="card-body text-center">
+                        <div id="optional-count" class="summary-value">--</div>
+                        <div class="summary-label">Optional</div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card bg-success text-white">
+                    <div class="card-body text-center">
+                        <div id="skip-count" class="summary-value">--</div>
+                        <div class="summary-label">Skip</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Filters Section -->
+        <div class="filters-section">
+            <div class="row">
+                <div class="col-md-3">
+                    <label for="warehouse-filter" class="form-label">Warehouse</label>
+                    <select id="warehouse-filter" class="form-select">
+                        <option value="">All Warehouses</option>
+                        <option value="burnaby">Burnaby</option>
+                        <option value="kentucky">Kentucky</option>
+                    </select>
+                </div>
+                <div class="col-md-3">
+                    <label for="supplier-filter" class="form-label">Supplier</label>
+                    <select id="supplier-filter" class="form-select">
+                        <option value="">All Suppliers</option>
+                    </select>
+                </div>
+                <div class="col-md-3">
+                    <label for="urgency-filter" class="form-label">Urgency</label>
+                    <select id="urgency-filter" class="form-select">
+                        <option value="">All Urgency Levels</option>
+                        <option value="must_order">Must Order</option>
+                        <option value="should_order">Should Order</option>
+                        <option value="optional">Optional</option>
+                        <option value="skip">Skip</option>
+                    </select>
+                </div>
+                <div class="col-md-3">
+                    <label for="search-box" class="form-label">Search SKU</label>
+                    <input type="text" id="search-box" class="form-control" placeholder="Search by SKU or Description">
+                </div>
+            </div>
+        </div>
+
+        <!-- Orders Table -->
+        <div class="table-responsive">
+            <table id="orders-table" class="table table-striped table-hover table-sm">
+                <thead>
+                    <tr>
+                        <th>SKU</th>
+                        <th>Description</th>
+                        <th>Warehouse</th>
+                        <th>Supplier</th>
+                        <th>Current Stock</th>
+                        <th>Pending (Eff)</th>
+                        <th>Suggested Qty</th>
+                        <th>Confirmed Qty</th>
+                        <th>Lead Time (days)</th>
+                        <th>Expected Arrival</th>
+                        <th>Coverage (mo)</th>
+                        <th>Urgency</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="orders-table-body">
+                    <!-- Table rows will be populated by JavaScript -->
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- SKU Details Modal (TASK-384) -->
+    <div class="modal fade" id="sku-details-modal" tabindex="-1" aria-labelledby="skuDetailsModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-xl">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="skuDetailsModalLabel">SKU Details</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <!-- Tabs Navigation -->
+                    <ul class="nav nav-tabs" id="sku-details-tabs" role="tablist">
+                        <li class="nav-item" role="presentation">
+                            <button class="nav-link active" id="overview-tab" data-bs-toggle="tab" data-bs-target="#overview" type="button" role="tab">
+                                <i class="fas fa-info-circle me-1"></i>Overview
+                            </button>
+                        </li>
+                        <li class="nav-item" role="presentation">
+                            <button class="nav-link" id="pending-tab" data-bs-toggle="tab" data-bs-target="#pending" type="button" role="tab">
+                                <i class="fas fa-clock me-1"></i>Pending Orders
+                            </button>
+                        </li>
+                        <li class="nav-item" role="presentation">
+                            <button class="nav-link" id="forecast-tab" data-bs-toggle="tab" data-bs-target="#forecast" type="button" role="tab">
+                                <i class="fas fa-chart-line me-1"></i>12-Month Forecast
+                            </button>
+                        </li>
+                        <li class="nav-item" role="presentation">
+                            <button class="nav-link" id="stockout-tab" data-bs-toggle="tab" data-bs-target="#stockout" type="button" role="tab">
+                                <i class="fas fa-exclamation-triangle me-1"></i>Stockout History
+                            </button>
+                        </li>
+                    </ul>
+
+                    <!-- Tab Content -->
+                    <div class="tab-content mt-3" id="sku-details-content">
+                        <!-- Overview Tab -->
+                        <div class="tab-pane fade show active" id="overview" role="tabpanel">
+                            <div id="overview-content">
+                                <p class="text-muted">Loading overview...</p>
+                            </div>
+                        </div>
+
+                        <!-- Pending Orders Tab -->
+                        <div class="tab-pane fade" id="pending" role="tabpanel">
+                            <div id="pending-content">
+                                <p class="text-muted">Click to load pending orders timeline...</p>
+                            </div>
+                        </div>
+
+                        <!-- 12-Month Forecast Tab -->
+                        <div class="tab-pane fade" id="forecast" role="tabpanel">
+                            <div id="forecast-content">
+                                <canvas id="forecast-chart" height="80"></canvas>
+                            </div>
+                        </div>
+
+                        <!-- Stockout History Tab -->
+                        <div class="tab-pane fade" id="stockout" role="tabpanel">
+                            <div id="stockout-content">
+                                <p class="text-muted">Click to load stockout history...</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Bootstrap JS -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <!-- jQuery (required for DataTables) -->
+    <script src="https://code.jquery.com/jquery-3.7.0.min.js"></script>
+    <!-- DataTables JS -->
+    <script src="https://cdn.datatables.net/1.13.6/js/jquery.dataTables.min.js"></script>
+    <script src="https://cdn.datatables.net/1.13.6/js/dataTables.bootstrap5.min.js"></script>
+    <!-- Chart.js for visualizations -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <!-- Custom JS -->
+    <script src="supplier-ordering.js"></script>
+</body>
+</html>
