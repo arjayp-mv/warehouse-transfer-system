@@ -2516,7 +2516,7 @@ ajax: {
 
 ## V10.0: Supplier Ordering Intelligence Layer
 
-**Status**: IN PROGRESS - Intelligent ordering with forecasts and learning (2025-10-24)
+**Status**: PHASE 1 COMPLETE - Phase 2 (Intelligence Layer) Ready to Start (2025-10-31)
 
 **Summary**: Enhancement of V9.0 Supplier Ordering System to leverage the sophisticated V8.0 Forecasting System. Currently, supplier ordering uses backward-looking historical sales data (monthly_sales table). This update integrates forward-looking 12-month forecasts with learning adjustments, seasonal patterns, and stockout awareness to create truly intelligent supplier ordering recommendations.
 
@@ -2549,45 +2549,100 @@ Integration of existing intelligence tables without adding complexity:
 
 ---
 
-### Phase 1: Critical Fixes and API Endpoints (TASK-593 to TASK-603) - 4-6 hours
-
-**Objective**: Fix SKU Details modal errors and add CSV export
-
-#### Backend API Development (3-4 hours)
-
-- [ ] **TASK-593**: Create backend/supplier_ordering_sku_details.py module
-- [ ] **TASK-594**: Implement GET /api/pending-orders/sku/{sku_id} endpoint
-- [ ] **TASK-595**: Implement GET /api/forecasts/sku/{sku_id}/latest endpoint
-- [ ] **TASK-596**: Implement GET /api/stockouts/sku/{sku_id} endpoint
-- [ ] **TASK-597**: Add GET /api/supplier-orders/export/csv endpoint
-- [ ] **TASK-598**: Backend error handling and validation
-
-#### Backend Testing (1 hour)
-
-- [ ] **TASK-599**: Create backend/test_sku_details_api.py test script
-- [ ] **TASK-600**: Performance testing for new endpoints
-
-#### Frontend Integration (1-2 hours)
-
-- [ ] **TASK-601**: Update frontend/supplier-ordering.js modal tab functions
-- [ ] **TASK-602**: Implement Chart.js visualization for forecast tab
-- [ ] **TASK-603**: Add CSV export button to frontend
-
----
-
-### V10.0.1: SKU Details Modal Warehouse Filtering Fix (COMPLETED)
+### Phase 1: Critical Fixes and API Endpoints (TASK-593 to TASK-603) - COMPLETED
 
 **Status**: COMPLETED - 2025-10-31
 
-**Summary**: Fixed critical bug where SKU Details modal was showing identical stockout history for different warehouses due to lack of content cleanup between modal opens. The modal retained stale data from previous warehouse views, causing confusion and incorrect business decisions.
+**Objective**: Fix SKU Details modal errors and add CSV export
 
-**Issue Identified**:
-- User reported: "I see the same stockout history for both burnaby and kentucky when it should be separated"
-- Root cause: Modal content persisted between opens (no cleanup mechanism)
-- Event listeners with `{ once: true }` wouldn't fire on subsequent modal opens
-- Stale tab content remained in DOM from previous warehouse selection
+#### Backend API Development (3-4 hours) - COMPLETED
+
+- [x] **TASK-593**: Create backend/supplier_ordering_sku_details.py module
+  - Module created with comprehensive docstrings and proper error handling
+  - Separation of concerns from main supplier_ordering_api.py
+- [x] **TASK-594**: Implement GET /api/pending-orders/sku/{sku_id} endpoint
+  - Returns time-phased pending orders categorized by urgency
+  - Includes confidence scoring from supplier reliability
+- [x] **TASK-595**: Implement GET /api/forecasts/sku/{sku_id}/latest endpoint
+  - Returns 12-month forecast with learning adjustments
+  - Unpivots month columns into monthly_forecast array
+- [x] **TASK-596**: Implement GET /api/stockouts/sku/{sku_id} endpoint
+  - Returns warehouse-filtered stockout history with pattern detection
+  - Optional warehouse parameter for cross-warehouse comparison
+- [x] **TASK-597**: Add GET /api/supplier-orders/export/csv endpoint
+  - Endpoint exists at `/api/supplier-ordering/recommendations/{order_month}/csv`
+  - Supports warehouse filtering
+- [x] **TASK-598**: Backend error handling and validation
+  - All endpoints include try/catch blocks with proper logging
+  - HTTPException handling for 404 (not found) and 500 (server error)
+  - SKU existence validation before processing
+
+#### Backend Testing (1 hour) - PARTIALLY COMPLETE
+
+- [x] **TASK-599**: Create backend/test_sku_details_api.py test script
+  - Test script created for endpoint validation
+- [ ] **TASK-600**: Performance testing for new endpoints
+  - Manual testing performed during development
+  - Formal performance benchmarking pending
+
+#### Frontend Integration (1-2 hours) - COMPLETED
+
+- [x] **TASK-601**: Update frontend/supplier-ordering.js modal tab functions
+  - Modal tabs load data correctly with warehouse-specific filtering
+  - Proper event listener management with `{ once: true }`
+  - Content cleanup system implemented (V10.0.1)
+- [x] **TASK-602**: Implement Chart.js visualization for forecast tab
+  - Chart displays 12-month forecast data
+  - Fixed canvas expansion bug (V10.0.1 - TASK-626)
+  - Proper chart instance cleanup to prevent memory leaks
+- [x] **TASK-603**: Add CSV export button to frontend
+  - Export button added to supplier-ordering.html (line 223-224)
+  - Calls exportToCSV() function
+
+**Phase 1 Summary**:
+All critical API endpoints, frontend integrations, and modal functionality are now complete and tested. The SKU Details modal successfully loads pending orders, forecasts, and stockout history with proper warehouse filtering. CSV export functionality is available. The system is ready for Phase 2 intelligence layer integration.
+
+**Completion Date**: 2025-10-31
+**Total Tasks Completed**: 10 of 11 (TASK-600 performance benchmarking deferred)
+
+---
+
+### V10.0.1: SKU Details Modal Fixes (COMPLETED)
+
+**Status**: COMPLETED - 2025-10-31
+
+**Summary**: Fixed two critical bugs in SKU Details modal: (1) Chart.js canvas expansion on every view, and (2) Identical stockout history showing for different warehouses. Both issues were frontend-only problems requiring no backend changes.
+
+**Issues Identified**:
+1. **Chart Expansion Bug**: User reported "whenever you go to check the chart even if first time it keeps expanding"
+   - Root cause: Canvas element had `height="80"` attribute causing sizing conflicts with Chart.js `maintainAspectRatio: false`
+
+2. **Warehouse Filtering Bug**: User reported "I see the same stockout history for both burnaby and kentucky when it should be separated"
+   - Root cause: Modal content persisted between opens (no cleanup mechanism)
+   - Event listeners with `{ once: true }` wouldn't fire on subsequent modal opens
+   - Stale tab content remained in DOM from previous warehouse selection
 
 **Solution Implemented**:
+
+#### TASK-626: Chart.js Canvas Expansion Fix
+**File**: `frontend/supplier-ordering.js` (line 753)
+
+**Changes Made**:
+- Removed `height="80"` attribute from canvas element
+- Wrapped canvas in fixed-height container: `<div style="height: 400px; max-height: 400px;">`
+- Allows Chart.js to properly manage responsive behavior without conflicts
+
+**Before**:
+```javascript
+'<canvas id="forecast-chart" height="80"></canvas>'
+```
+
+**After**:
+```javascript
+'<div style="height: 400px; max-height: 400px;"><canvas id="forecast-chart"></canvas></div>'
+```
+
+**User Confirmation**: "it's fixed now"
 
 #### TASK-625: Modal Content Cleanup System
 **File**: `frontend/supplier-ordering.js` (lines 556-613)
@@ -2614,16 +2669,19 @@ INFO: GET /api/stockouts/sku/ACF-10134?warehouse=kentucky
 ```
 
 **Business Impact**:
+- Fixed unusable forecast chart that made demand projections inaccessible
 - Accurate warehouse-specific stockout history display
-- Eliminated confusion from stale data
+- Eliminated confusion from stale data showing wrong warehouse
 - Improved decision-making for warehouse-specific ordering
 - Better user experience with clear modal state management
 
 **Technical Achievements**:
+- Resolved Chart.js responsive behavior conflicts
 - Proper modal lifecycle management
-- Memory leak prevention via chart cleanup
+- Memory leak prevention via chart instance cleanup
 - Event listener management following best practices
-- No backend changes required (API was working correctly)
+- No backend changes required (APIs were working correctly)
+- Both fixes required only frontend JavaScript modifications
 
 ---
 
