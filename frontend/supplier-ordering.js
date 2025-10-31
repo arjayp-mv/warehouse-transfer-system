@@ -126,7 +126,7 @@ function initializeDataTable() {
         },
         columns: [
             { data: 'sku_id', render: function(data, type, row) {
-                return `<span class="sku-link" onclick="openSKUDetailsModal('${data}')">${data}</span>`;
+                return `<span class="sku-link" onclick="openSKUDetailsModal('${data}', '${row.warehouse}')">${data}</span>`;
             }},
             { data: 'description' },
             { data: 'warehouse', render: function(data) {
@@ -511,21 +511,103 @@ async function exportToExcel() {
 }
 
 /**
+ * Export supplier order recommendations to CSV
+ * TASK-603: CSV export functionality
+ * Fetches CSV from backend API and triggers browser download
+ */
+async function exportToCSV() {
+    try {
+        showLoading('Generating CSV file...');
+
+        const response = await fetch(`/api/supplier-orders/${currentOrderMonth}/csv`);
+
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+
+        const blob = await response.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `supplier_orders_${currentOrderMonth}.csv`;
+        document.body.appendChild(a);
+        a.click();
+        window.URL.revokeObjectURL(url);
+        document.body.removeChild(a);
+
+        showSuccess('CSV file downloaded successfully');
+
+    } catch (error) {
+        console.error('Failed to export to CSV:', error);
+        showError('Unable to export to CSV. Please try again.');
+    } finally {
+        hideLoading();
+    }
+}
+
+/**
  * Open SKU details modal with tabbed interface
  * TASK-384: Enhanced with tabs, pending timeline, forecast chart, and stockout history
+ * TASK-601: Updated to pass warehouse parameter for API calls
+ * V10: Fixed warehouse filtering - clears content and resets state on each open
  * @param {string} skuId - SKU identifier
+ * @param {string} warehouse - Warehouse name (burnaby or kentucky)
  */
-function openSKUDetailsModal(skuId) {
-    const modal = new bootstrap.Modal(document.getElementById('sku-details-modal'));
-    document.getElementById('skuDetailsModalLabel').textContent = `SKU Details: ${skuId}`;
+function openSKUDetailsModal(skuId, warehouse) {
+    const modalElement = document.getElementById('sku-details-modal');
+    const modal = new bootstrap.Modal(modalElement);
+    document.getElementById('skuDetailsModalLabel').textContent = `SKU Details: ${skuId} - ${warehouse.charAt(0).toUpperCase() + warehouse.slice(1)}`;
+
+    // Clear all tab content from previous modal opens to prevent stale data
+    document.getElementById('overview-content').innerHTML = '<p class="text-muted">Loading...</p>';
+    document.getElementById('pending-content').innerHTML = '<p class="text-muted">Click to load pending orders...</p>';
+    document.getElementById('forecast-content').innerHTML = '<p class="text-muted">Click to load forecast data...</p>';
+    document.getElementById('stockout-content').innerHTML = '<p class="text-muted">Click to load stockout history...</p>';
+
+    // Reset tab button states - make Overview active, others inactive
+    document.getElementById('overview-tab').classList.add('active');
+    document.getElementById('pending-tab').classList.remove('active');
+    document.getElementById('forecast-tab').classList.remove('active');
+    document.getElementById('stockout-tab').classList.remove('active');
+
+    // Reset tab pane states - make Overview visible, others hidden
+    document.getElementById('overview').classList.add('show', 'active');
+    document.getElementById('pending').classList.remove('show', 'active');
+    document.getElementById('forecast').classList.remove('show', 'active');
+    document.getElementById('stockout').classList.remove('show', 'active');
+
+    // Destroy any existing chart instances to prevent memory leaks
+    if (window.forecastChartInstance) {
+        window.forecastChartInstance.destroy();
+        window.forecastChartInstance = null;
+    }
 
     // Load overview data immediately
     loadOverviewTab(skuId);
 
-    // Setup tab click event listeners for lazy loading
-    document.getElementById('pending-tab').addEventListener('click', () => loadPendingTab(skuId), { once: true });
-    document.getElementById('forecast-tab').addEventListener('click', () => loadForecastTab(skuId), { once: true });
-    document.getElementById('stockout-tab').addEventListener('click', () => loadStockoutTab(skuId), { once: true });
+    // Setup tab click event listeners for lazy loading with warehouse-specific data
+    document.getElementById('pending-tab').addEventListener('click', () => loadPendingTab(skuId, warehouse), { once: true });
+    document.getElementById('forecast-tab').addEventListener('click', () => loadForecastTab(skuId, warehouse), { once: true });
+    document.getElementById('stockout-tab').addEventListener('click', () => loadStockoutTab(skuId, warehouse), { once: true });
+
+    // Add cleanup event listener to clear all content when modal is hidden
+    // This ensures fresh data load on next modal open
+    modalElement.addEventListener('hidden.bs.modal', function cleanupModal() {
+        // Clear all tab content
+        document.getElementById('overview-content').innerHTML = '';
+        document.getElementById('pending-content').innerHTML = '';
+        document.getElementById('forecast-content').innerHTML = '';
+        document.getElementById('stockout-content').innerHTML = '';
+
+        // Destroy chart instance to free memory
+        if (window.forecastChartInstance) {
+            window.forecastChartInstance.destroy();
+            window.forecastChartInstance = null;
+        }
+
+        // Remove this event listener after cleanup (once: true alternative)
+        modalElement.removeEventListener('hidden.bs.modal', cleanupModal);
+    }, { once: true });
 
     modal.show();
 }
@@ -556,9 +638,9 @@ async function loadOverviewTab(skuId) {
             <div class="basic-info-grid">
                 <div class="info-card">
                     <h6>Inventory Position</h6>
-                    <p><strong>Current Stock:</strong> ${order.current_inventory || 0}</p>
-                    <p><strong>Pending (Effective):</strong> ${order.effective_pending || 0}</p>
-                    <p><strong>Total Position:</strong> ${(order.current_inventory || 0) + (order.effective_pending || 0)}</p>
+                    <p><strong>Current Inventory:</strong> ${order.current_inventory || 0}</p>
+                    <p><strong>Pending (Effective):</strong> ${order.pending_orders_effective || 0}</p>
+                    <p><strong>Total Available:</strong> ${(order.current_inventory || 0) + (order.pending_orders_effective || 0)}</p>
                 </div>
                 <div class="info-card">
                     <h6>Order Recommendation</h6>
@@ -591,14 +673,16 @@ async function loadOverviewTab(skuId) {
 
 /**
  * Load pending orders tab with timeline visualization
+ * TASK-601: Updated to pass warehouse parameter to API
  * @param {string} skuId - SKU identifier
+ * @param {string} warehouse - Warehouse name (burnaby or kentucky)
  * @returns {Promise<void>}
  */
-async function loadPendingTab(skuId) {
+async function loadPendingTab(skuId, warehouse) {
     try {
         document.getElementById('pending-content').innerHTML = '<p class="text-muted">Loading pending orders...</p>';
 
-        const response = await fetch(`/api/pending-orders/sku/${skuId}`);
+        const response = await fetch(`/api/pending-orders/sku/${skuId}?warehouse=${warehouse}`);
 
         if (!response.ok) {
             throw new Error(`HTTP error! status: ${response.status}`);
@@ -627,7 +711,7 @@ async function loadPendingTab(skuId) {
                             <span class="badge bg-${statusClass} ms-2">${order.status}</span>
                         </div>
                         <div class="text-end">
-                            <strong>${order.quantity} units</strong>
+                            <strong>${order.qty} units</strong>
                         </div>
                     </div>
                     <div class="mt-2 text-muted small">
@@ -649,46 +733,82 @@ async function loadPendingTab(skuId) {
 
 /**
  * Load 12-month forecast tab with Chart.js visualization
+ * TASK-601: Updated to pass warehouse parameter to API
  * @param {string} skuId - SKU identifier
+ * @param {string} warehouse - Warehouse name (burnaby or kentucky)
  * @returns {Promise<void>}
  */
-async function loadForecastTab(skuId) {
+async function loadForecastTab(skuId, warehouse) {
     try {
-        document.getElementById('forecast-content').innerHTML = '<canvas id="forecast-chart" height="80"></canvas><p class="text-muted text-center mt-2">Loading forecast...</p>';
+        // Show loading state
+        document.getElementById('forecast-content').innerHTML = '<p class="text-muted text-center">Loading forecast...</p>';
 
-        const response = await fetch(`/api/forecasts/sku/${skuId}/latest`);
+        const response = await fetch(`/api/forecasts/sku/${skuId}/latest?warehouse=${warehouse}`);
 
         if (!response.ok) {
             throw new Error(`HTTP error! status: ${response.status}`);
         }
 
         const data = await response.json();
-        const forecast = data.forecast || {};
+        const monthlyForecast = data.monthly_forecast || [];
 
-        // Extract month quantities
-        const months = ['Month 1', 'Month 2', 'Month 3', 'Month 4', 'Month 5', 'Month 6',
-                        'Month 7', 'Month 8', 'Month 9', 'Month 10', 'Month 11', 'Month 12'];
-        const quantities = [
-            forecast.month_1_qty || 0, forecast.month_2_qty || 0, forecast.month_3_qty || 0,
-            forecast.month_4_qty || 0, forecast.month_5_qty || 0, forecast.month_6_qty || 0,
-            forecast.month_7_qty || 0, forecast.month_8_qty || 0, forecast.month_9_qty || 0,
-            forecast.month_10_qty || 0, forecast.month_11_qty || 0, forecast.month_12_qty || 0
-        ];
+        if (monthlyForecast.length === 0) {
+            document.getElementById('forecast-content').innerHTML = '<p class="text-muted">No forecast data available for this SKU</p>';
+            return;
+        }
 
-        // Create chart
+        // Extract data from monthly_forecast array
+        const labels = monthlyForecast.map(m => {
+            const date = new Date(m.month + '-01');
+            return date.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
+        });
+        const baseData = monthlyForecast.map(m => Math.round(m.base_qty));
+        const adjustedData = monthlyForecast.map(m => Math.round(m.adjusted_qty));
+        const adjustmentReasons = monthlyForecast.map(m => m.adjustment_reason || 'No adjustment');
+
+        // Check if any learning adjustments were applied
+        const hasAdjustments = monthlyForecast.some(m => m.learning_applied);
+
+        // Build datasets
+        const datasets = [{
+            label: 'Base Forecast',
+            data: baseData,
+            borderColor: '#007bff',
+            backgroundColor: 'rgba(0, 123, 255, 0.1)',
+            tension: 0.4,
+            fill: false,
+            borderWidth: 2
+        }];
+
+        // Add adjusted forecast if there are any adjustments
+        if (hasAdjustments) {
+            datasets.push({
+                label: 'Learning-Adjusted Forecast',
+                data: adjustedData,
+                borderColor: '#28a745',
+                backgroundColor: 'rgba(40, 167, 69, 0.1)',
+                tension: 0.4,
+                fill: false,
+                borderWidth: 2,
+                borderDash: [5, 5]
+            });
+        }
+
+        // Create canvas for chart (replacing loading message) with proper container
+        document.getElementById('forecast-content').innerHTML = '<div style="height: 400px; max-height: 400px;"><canvas id="forecast-chart"></canvas></div>';
+
+        // Destroy previous chart instance if it exists
+        if (window.forecastChartInstance) {
+            window.forecastChartInstance.destroy();
+        }
+
+        // Create chart and store instance
         const ctx = document.getElementById('forecast-chart').getContext('2d');
-        new Chart(ctx, {
+        window.forecastChartInstance = new Chart(ctx, {
             type: 'line',
             data: {
-                labels: months,
-                datasets: [{
-                    label: 'Forecasted Demand',
-                    data: quantities,
-                    borderColor: '#007bff',
-                    backgroundColor: 'rgba(0, 123, 255, 0.1)',
-                    tension: 0.4,
-                    fill: true
-                }]
+                labels: labels,
+                datasets: datasets
             },
             options: {
                 responsive: true,
@@ -696,10 +816,22 @@ async function loadForecastTab(skuId) {
                 plugins: {
                     title: {
                         display: true,
-                        text: `12-Month Demand Forecast for ${skuId}`
+                        text: `12-Month Demand Forecast - ${data.forecast_method || 'Unknown Method'}`
                     },
                     legend: {
-                        display: false
+                        display: hasAdjustments,
+                        position: 'bottom'
+                    },
+                    tooltip: {
+                        callbacks: {
+                            afterLabel: function(context) {
+                                const index = context.dataIndex;
+                                if (monthlyForecast[index].learning_applied) {
+                                    return adjustmentReasons[index];
+                                }
+                                return '';
+                            }
+                        }
                     }
                 },
                 scales: {
@@ -707,12 +839,32 @@ async function loadForecastTab(skuId) {
                         beginAtZero: true,
                         title: {
                             display: true,
-                            text: 'Units'
+                            text: 'Units per Month'
+                        }
+                    },
+                    x: {
+                        title: {
+                            display: true,
+                            text: 'Month'
                         }
                     }
                 }
             }
         });
+
+        // Add forecast metadata below chart (use insertAdjacentHTML to preserve Chart.js instance)
+        const metadataHtml = `
+            <div class="mt-3 text-muted small">
+                <p><strong>Forecast Details:</strong></p>
+                <ul>
+                    <li>Run ID: ${data.forecast_run_id || 'N/A'}</li>
+                    <li>Method: ${data.forecast_method || 'Unknown'}</li>
+                    <li>Average Monthly Demand: ${Math.round(data.avg_monthly || 0)} units</li>
+                    ${hasAdjustments ? '<li>Learning adjustments applied based on historical patterns</li>' : ''}
+                </ul>
+            </div>
+        `;
+        document.getElementById('forecast-content').insertAdjacentHTML('beforeend', metadataHtml);
 
     } catch (error) {
         console.error('Failed to load forecast:', error);
@@ -725,11 +877,11 @@ async function loadForecastTab(skuId) {
  * @param {string} skuId - SKU identifier
  * @returns {Promise<void>}
  */
-async function loadStockoutTab(skuId) {
+async function loadStockoutTab(skuId, warehouse) {
     try {
         document.getElementById('stockout-content').innerHTML = '<p class="text-muted">Loading stockout history...</p>';
 
-        const response = await fetch(`/api/stockouts/sku/${skuId}`);
+        const response = await fetch(`/api/stockouts/sku/${skuId}?warehouse=${warehouse}`);
 
         if (!response.ok) {
             throw new Error(`HTTP error! status: ${response.status}`);

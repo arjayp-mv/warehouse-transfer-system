@@ -2512,3 +2512,215 @@ ajax: {
 **Completion Date**: 2025-10-24
 
 ---
+---
+
+## V10.0: Supplier Ordering Intelligence Layer
+
+**Status**: IN PROGRESS - Intelligent ordering with forecasts and learning (2025-10-24)
+
+**Summary**: Enhancement of V9.0 Supplier Ordering System to leverage the sophisticated V8.0 Forecasting System. Currently, supplier ordering uses backward-looking historical sales data (monthly_sales table). This update integrates forward-looking 12-month forecasts with learning adjustments, seasonal patterns, and stockout awareness to create truly intelligent supplier ordering recommendations.
+
+**Business Problem**:
+- Current system ignores 12-month forecast projections from V8.0
+- No learning from past forecast errors (forecast_learning_adjustments table unused)
+- No seasonal adjustment for Q4 peaks or January lulls
+- Missing stockout pattern awareness (chronic stockout SKUs not prioritized)
+- SKU details modal shows errors for pending orders, forecasts, and stockout history
+
+**Solution Approach**:
+Integration of existing intelligence tables without adding complexity:
+- Switch from monthly_sales.corrected_demand to forecast_details.avg_monthly_qty
+- Apply forecast_learning_adjustments.adjusted_value when available
+- Use seasonal_patterns monthly factors to adjust safety stock
+- Boost urgency for SKUs with stockout_patterns.stockout_pattern_detected=1
+- Implement missing API endpoints for modal tabs
+
+**Architecture Principles** (per claude-code-best-practices.md):
+- No calculations on page load (all pre-calculated or background jobs)
+- File size limit: 400 lines warning, 500 lines maximum
+- Create separate modules instead of growing existing files
+- Database aggregation over Python loops
+- Pagination: max 50-100 items per request
+- Performance target: API responses under 500ms, page loads under 2s
+
+**Task Range**: TASK-593 to TASK-619 (27 tasks across 3 phases)
+
+**Estimated Time**: 8-12 hours total
+
+---
+
+### Phase 1: Critical Fixes and API Endpoints (TASK-593 to TASK-603) - 4-6 hours
+
+**Objective**: Fix SKU Details modal errors and add CSV export
+
+#### Backend API Development (3-4 hours)
+
+- [ ] **TASK-593**: Create backend/supplier_ordering_sku_details.py module
+- [ ] **TASK-594**: Implement GET /api/pending-orders/sku/{sku_id} endpoint
+- [ ] **TASK-595**: Implement GET /api/forecasts/sku/{sku_id}/latest endpoint
+- [ ] **TASK-596**: Implement GET /api/stockouts/sku/{sku_id} endpoint
+- [ ] **TASK-597**: Add GET /api/supplier-orders/export/csv endpoint
+- [ ] **TASK-598**: Backend error handling and validation
+
+#### Backend Testing (1 hour)
+
+- [ ] **TASK-599**: Create backend/test_sku_details_api.py test script
+- [ ] **TASK-600**: Performance testing for new endpoints
+
+#### Frontend Integration (1-2 hours)
+
+- [ ] **TASK-601**: Update frontend/supplier-ordering.js modal tab functions
+- [ ] **TASK-602**: Implement Chart.js visualization for forecast tab
+- [ ] **TASK-603**: Add CSV export button to frontend
+
+---
+
+### V10.0.1: SKU Details Modal Warehouse Filtering Fix (COMPLETED)
+
+**Status**: COMPLETED - 2025-10-31
+
+**Summary**: Fixed critical bug where SKU Details modal was showing identical stockout history for different warehouses due to lack of content cleanup between modal opens. The modal retained stale data from previous warehouse views, causing confusion and incorrect business decisions.
+
+**Issue Identified**:
+- User reported: "I see the same stockout history for both burnaby and kentucky when it should be separated"
+- Root cause: Modal content persisted between opens (no cleanup mechanism)
+- Event listeners with `{ once: true }` wouldn't fire on subsequent modal opens
+- Stale tab content remained in DOM from previous warehouse selection
+
+**Solution Implemented**:
+
+#### TASK-625: Modal Content Cleanup System
+**File**: `frontend/supplier-ordering.js` (lines 556-613)
+
+**Changes Made**:
+1. **Content Clearing**: Clear all tab content (`#overview-content`, `#pending-content`, `#forecast-content`, `#stockout-content`) before setting up new event listeners
+2. **Tab State Reset**: Reset all tabs to default state (Overview active, others inactive)
+3. **Tab Pane Reset**: Show Overview pane, hide all other panes
+4. **Chart Cleanup**: Destroy existing Chart.js instances to prevent memory leaks
+5. **Modal Cleanup Handler**: Added `hidden.bs.modal` event listener to clear all content when modal closes
+6. **Modal Title Enhancement**: Added warehouse name to modal title for clarity: "SKU Details: {skuId} - {Warehouse}"
+
+**Testing Results**:
+- Tested with SKU ACF-10134 (has different stockout dates per warehouse)
+- Burnaby: 2 stockout records (4/27/2025, 7/5/2023)
+- Kentucky: 2 stockout records (5/8/2025, 7/5/2023) - Different dates!
+- Verified backend API calls include correct warehouse parameter
+- Confirmed data separation at all levels: frontend → API → database
+
+**Backend Verification**:
+```
+INFO: GET /api/stockouts/sku/ACF-10134?warehouse=burnaby
+INFO: GET /api/stockouts/sku/ACF-10134?warehouse=kentucky
+```
+
+**Business Impact**:
+- Accurate warehouse-specific stockout history display
+- Eliminated confusion from stale data
+- Improved decision-making for warehouse-specific ordering
+- Better user experience with clear modal state management
+
+**Technical Achievements**:
+- Proper modal lifecycle management
+- Memory leak prevention via chart cleanup
+- Event listener management following best practices
+- No backend changes required (API was working correctly)
+
+---
+
+### Phase 2: Intelligence Layer (TASK-604 to TASK-612) - 2-3 hours
+
+**Objective**: Integrate forecasts, learning, seasonal patterns, and stockout awareness
+
+#### Forecast Integration (1.5 hours)
+
+- [ ] **TASK-604**: Refactor demand source in supplier_ordering_calculations.py
+- [ ] **TASK-605**: Integrate forecast learning adjustments
+- [ ] **TASK-606**: Add forecast metadata to order confirmations
+
+#### Seasonal Adjustments (1 hour)
+
+- [ ] **TASK-607**: Create seasonal adjustment helper in supplier_ordering_calculations.py
+- [ ] **TASK-608**: Integrate seasonal adjustments into safety stock calculation
+
+#### Stockout Pattern Awareness (0.5 hours)
+
+- [ ] **TASK-609**: Add stockout pattern checking to urgency determination
+- [ ] **TASK-610**: Backend testing for intelligence layer
+- [ ] **TASK-611**: Update generate recommendations to show intelligence
+- [ ] **TASK-612**: Documentation for intelligence features
+
+---
+
+### Phase 3: Visualization and UX (TASK-613 to TASK-619) - 2-3 hours
+
+**Objective**: Coverage timeline, supplier performance, revenue metrics
+
+#### Coverage Timeline (1.5 hours)
+
+- [ ] **TASK-613**: Create backend/supplier_coverage_timeline.py module
+- [ ] **TASK-614**: Add GET /api/coverage-timeline/sku/{sku_id} endpoint
+- [ ] **TASK-615**: Add coverage timeline tab to SKU modal (frontend)
+
+#### Supplier Performance Tab (1 hour)
+
+- [ ] **TASK-616**: Create supplier performance summary view
+- [ ] **TASK-617**: Add Supplier Performance modal tab (frontend)
+
+#### Revenue Metrics (0.5 hours)
+
+- [ ] **TASK-618**: Add revenue metrics to summary cards
+- [ ] **TASK-619**: Revenue breakdown by supplier
+
+---
+
+### Phase 4: Data Quality Enhancements (TASK-620 to TASK-624) - OPTIONAL
+
+**Status**: Future Enhancement - Not Required for V10.0 Completion
+
+**Objective**: Apply supplier mapping intelligence to pending inventory imports
+
+This optional phase integrates the proven supplier name matching system from V5.0 Supplier Shipments to the pending inventory import workflow. Benefits include:
+- Auto-mapping supplier names with 90%+ confidence
+- Manual review workflow for ambiguous matches
+- Automatic alias creation for future imports
+- Links pending_inventory to suppliers master table via foreign key
+- Eliminates duplicate supplier names (Yuasa vs YUASA vs Yuasa Battery)
+- Single source of truth for supplier data across all modules
+
+**Tasks**:
+- [ ] **TASK-620**: Create preview endpoint for supplier name analysis
+- [ ] **TASK-621**: Modify import to accept supplier mappings
+- [ ] **TASK-622**: Add mapping modal UI for pending orders
+- [ ] **TASK-623**: Database migration for supplier foreign key
+- [ ] **TASK-624**: End-to-end testing of mapping workflow
+
+**Estimated Time**: 4-6 hours
+
+**See**: docs/V10_TASK_DETAILS.md for complete specifications
+
+---
+
+## Task Details
+
+See docs/V10_TASK_DETAILS.md for complete implementation specifications, code examples, testing requirements, and documentation standards.
+
+---
+
+## Success Criteria
+
+V10.0 is complete when:
+- [ ] All 3 SKU detail modal tabs load without errors
+- [ ] CSV export generates valid file with correct data
+- [ ] System uses forecast_details instead of monthly_sales for demand
+- [ ] Learning adjustments applied when available
+- [ ] Seasonal adjustments boost safety stock in peak months
+- [ ] Stockout patterns boost urgency for chronic SKUs
+- [ ] Coverage timeline predicts stockout dates accurately
+- [ ] Supplier performance metrics displayed
+- [ ] Revenue metrics shown in summary cards
+- [ ] All Playwright tests pass
+- [ ] Performance benchmarks met (under 2s page load, under 500ms APIs)
+- [ ] Documentation updated
+- [ ] No file exceeds 600 lines
+
+**Completion Date**: TBD (Target: 2025-10-25)
