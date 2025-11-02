@@ -21,6 +21,7 @@ Created: 2025-01-22
 """
 
 import calendar
+import time
 from datetime import datetime, date, timedelta
 from decimal import Decimal
 from math import sqrt
@@ -71,22 +72,22 @@ def get_time_phased_pending_orders(
             id,
             quantity,
             order_date,
-            expected_arrival,
+            COALESCE(expected_arrival, DATE_ADD(order_date, INTERVAL lead_time_days DAY)) as expected_arrival,
             lead_time_days,
             status,
             is_estimated,
-            DATEDIFF(expected_arrival, CURDATE()) as days_until_arrival,
+            DATEDIFF(COALESCE(expected_arrival, DATE_ADD(order_date, INTERVAL lead_time_days DAY)), CURDATE()) as days_until_arrival,
             CASE
-                WHEN expected_arrival < CURDATE() AND status != 'received' THEN 1
+                WHEN COALESCE(expected_arrival, DATE_ADD(order_date, INTERVAL lead_time_days DAY)) < CURDATE() AND status != 'received' THEN 1
                 ELSE 0
-            END as is_late
+            END as is_late,
+            CASE WHEN is_estimated = 1 THEN 0.65 ELSE 0.85 END as base_confidence
         FROM pending_inventory
         WHERE sku_id = %s
           AND destination = %s
           AND order_type = 'supplier'
           AND status IN ('ordered', 'shipped')
-          AND expected_arrival IS NOT NULL
-        ORDER BY expected_arrival
+        ORDER BY COALESCE(expected_arrival, DATE_ADD(order_date, INTERVAL lead_time_days DAY))
     """
 
     pending_orders = execute_query(query, (sku_id, warehouse), fetch_one=False, fetch_all=True) or []
@@ -167,41 +168,46 @@ def calculate_effective_pending_inventory(
 
     # Process overdue orders
     for order in pending['overdue']:
-        # Apply 80% confidence for overdue orders
-        confidence = 0.8
+        # Apply 80% time-based confidence for overdue orders, combined with base confidence
+        time_confidence = 0.8
+        base_conf = float(order.get('base_confidence', 0.85))
+        confidence = time_confidence * base_conf
         effective_qty = order['quantity'] * confidence
         effective_pending += effective_qty
 
         pending_detail.append({
             'order_id': order['id'],
             'quantity': order['quantity'],
-            'confidence': confidence,
+            'confidence': round(confidence, 2),
             'category': 'overdue',
             'expected_arrival': str(order['expected_arrival']),
-            'reason': f"Overdue by {-order['days_until_arrival']} days"
+            'reason': f"Overdue by {-order['days_until_arrival']} days (estimated={order.get('is_estimated', 0)})"
         })
 
     # Process imminent orders (arriving within review period)
     for order in pending['imminent']:
-        # 100% confidence for imminent orders
-        confidence = 1.0
+        # 100% time-based confidence for imminent orders, combined with base confidence
+        time_confidence = 1.0
+        base_conf = float(order.get('base_confidence', 0.85))
+        confidence = time_confidence * base_conf
         effective_qty = order['quantity'] * confidence
         effective_pending += effective_qty
 
         pending_detail.append({
             'order_id': order['id'],
             'quantity': order['quantity'],
-            'confidence': confidence,
+            'confidence': round(confidence, 2),
             'category': 'imminent',
             'expected_arrival': str(order['expected_arrival']),
-            'reason': f"Arriving in {order['days_until_arrival']} days"
+            'reason': f"Arriving in {order['days_until_arrival']} days (estimated={order.get('is_estimated', 0)})"
         })
 
     # Process covered orders (arriving during lead time)
     for order in pending['covered']:
-        # Confidence based on supplier reliability and time distance
+        # Confidence based on supplier reliability, time distance, and base confidence
         time_factor = 1 - (order['days_until_arrival'] / planning_horizon) * 0.2
-        confidence = reliability_score * time_factor
+        base_conf = float(order.get('base_confidence', 0.85))
+        confidence = reliability_score * time_factor * base_conf
         effective_qty = order['quantity'] * confidence
         effective_pending += effective_qty
 
@@ -211,7 +217,7 @@ def calculate_effective_pending_inventory(
             'confidence': round(confidence, 2),
             'category': 'covered',
             'expected_arrival': str(order['expected_arrival']),
-            'reason': f"Lead time coverage, {int(reliability_score*100)}% reliability"
+            'reason': f"Lead time coverage, {int(reliability_score*100)}% reliability (estimated={order.get('is_estimated', 0)})"
         })
 
     # Calculate future ignored quantity
@@ -225,11 +231,262 @@ def calculate_effective_pending_inventory(
     }
 
 
+def get_forecast_demand(sku_id: str, warehouse: str) -> Optional[Dict]:
+    """
+    Get forecast-based demand with learning adjustments and confidence-based blending.
+
+    Implements tiered confidence approach:
+    - < 0.5: Use historical corrected_demand only
+    - 0.5-0.75: Blend forecast with historical (weighted by confidence)
+    - > 0.75: Use forecast only
+
+    Uses latest completed forecast run and applies learning adjustments where applied=TRUE.
+
+    Args:
+        sku_id: SKU identifier
+        warehouse: Warehouse code (burnaby or kentucky)
+
+    Returns:
+        {
+            'demand_monthly': float (blended or pure forecast),
+            'demand_source': str ('forecast', 'blended', or 'historical'),
+            'forecast_confidence': float (ABC/XYZ-based: 0.40-0.90),
+            'learning_applied': bool,
+            'learning_adjustment': float,
+            'forecast_run_id': int,
+            'blend_weight': float (if blended, otherwise None)
+        } or None if no forecast available
+    """
+    # Query latest completed forecast with learning adjustments
+    forecast_query = """
+        SELECT
+            fd.sku_id,
+            fd.warehouse,
+            fd.forecast_run_id,
+            fd.avg_monthly_qty,
+            fd.method_used,
+            fd.confidence_score,
+            fr.forecast_date,
+            COALESCE(SUM(CASE WHEN fla.applied = 1 THEN fla.adjustment_magnitude ELSE 0 END), 0) as total_learning_adjustment,
+            CASE WHEN SUM(CASE WHEN fla.applied = 1 THEN 1 ELSE 0 END) > 0 THEN 1 ELSE 0 END as has_learning
+        FROM forecast_details fd
+        JOIN forecast_runs fr ON fd.forecast_run_id = fr.id
+        LEFT JOIN forecast_learning_adjustments fla ON fd.sku_id = fla.sku_id AND fla.applied = 1
+        WHERE fd.sku_id = %s
+            AND fd.warehouse = %s
+            AND fd.forecast_run_id = (
+                SELECT MAX(forecast_run_id)
+                FROM forecast_details
+                WHERE sku_id = %s
+                    AND warehouse = %s
+                    AND forecast_run_id IN (
+                        SELECT id FROM forecast_runs WHERE status = 'completed'
+                    )
+            )
+        GROUP BY fd.sku_id, fd.warehouse, fd.forecast_run_id, fd.avg_monthly_qty,
+                 fd.method_used, fd.confidence_score, fr.forecast_date
+        LIMIT 1
+    """
+
+    forecast_result = execute_query(
+        forecast_query,
+        (sku_id, warehouse, sku_id, warehouse),
+        fetch_one=True,
+        fetch_all=False
+    )
+
+    # If no forecast available, return None (will trigger historical fallback)
+    if not forecast_result or not forecast_result.get('avg_monthly_qty'):
+        return None
+
+    # Extract forecast data
+    forecast_avg_monthly = float(forecast_result.get('avg_monthly_qty'))
+    confidence_score = float(forecast_result.get('confidence_score') or 0.75)
+    learning_adjustment = float(forecast_result.get('total_learning_adjustment') or 0)
+    has_learning = bool(forecast_result.get('has_learning'))
+
+    # Apply learning adjustments to forecast
+    if has_learning and learning_adjustment != 0:
+        forecast_avg_monthly = forecast_avg_monthly * (1 + learning_adjustment)
+
+    # Get historical corrected_demand for blending (if needed)
+    historical_query = """
+        SELECT
+            CASE
+                WHEN %s = 'burnaby' THEN corrected_demand_burnaby
+                WHEN %s = 'kentucky' THEN corrected_demand_kentucky
+            END as corrected_demand
+        FROM monthly_sales
+        WHERE sku_id = %s
+        ORDER BY `year_month` DESC
+        LIMIT 1
+    """
+    historical_result = execute_query(
+        historical_query,
+        (warehouse, warehouse, sku_id),
+        fetch_one=True,
+        fetch_all=False
+    )
+    historical_corrected = float(historical_result.get('corrected_demand')) if historical_result and historical_result.get('corrected_demand') else 0
+
+    # Apply confidence-based blending logic
+    if confidence_score < 0.5:
+        # Very low confidence - use historical only
+        final_demand = historical_corrected
+        demand_source = 'historical'
+        blend_weight = None
+
+    elif confidence_score < 0.75:
+        # Moderate confidence - blend forecast with historical (weighted by confidence)
+        if historical_corrected > 0:
+            blend_weight = confidence_score
+            final_demand = (forecast_avg_monthly * blend_weight) + (historical_corrected * (1 - blend_weight))
+            demand_source = 'blended'
+        else:
+            # No historical data - use forecast only
+            final_demand = forecast_avg_monthly
+            demand_source = 'forecast'
+            blend_weight = None
+
+    else:
+        # High confidence - trust forecast
+        final_demand = forecast_avg_monthly
+        demand_source = 'forecast'
+        blend_weight = None
+
+    return {
+        'demand_monthly': round(final_demand, 2),
+        'demand_source': demand_source,
+        'forecast_confidence': round(confidence_score, 2),
+        'learning_applied': has_learning,
+        'learning_adjustment': round(learning_adjustment, 4),
+        'forecast_run_id': forecast_result.get('forecast_run_id'),
+        'forecast_method': forecast_result.get('method_used'),
+        'blend_weight': round(blend_weight, 2) if blend_weight is not None else None
+    }
+
+
+def get_seasonal_adjustment_factor(sku_id: str, warehouse: str, order_month: int) -> Dict:
+    """
+    Get seasonal pattern adjustment for safety stock.
+    Uses dynamic multiplier based on pattern strength (Claude KB recommendation).
+
+    Pattern Reliability Criteria (ALL required):
+    - pattern_strength > 0.3 (from seasonal_factors.py:50)
+    - overall_confidence > 0.6 (from seasonal_analysis.py:59)
+    - statistical_significance = TRUE (p < 0.15)
+
+    Dynamic Multipliers:
+    - Strong pattern (strength >= 0.5): 1.3x
+    - Moderate pattern (strength >= 0.3): 1.2x
+    - Weak pattern (strength < 0.3): 1.15x (but filtered out by min threshold)
+
+    Args:
+        sku_id: SKU identifier
+        warehouse: Warehouse code (burnaby or kentucky)
+        order_month: Month number (1-12) for which order is being placed
+
+    Returns:
+        {
+            'pattern_type': str or None,
+            'adjustment_factor': float (1.0 if no adjustment, 1.15-1.3 if adjusted),
+            'approaching_peak': bool,
+            'pattern_strength': float,
+            'overall_confidence': float,
+            'statistical_significance': bool,
+            'peak_months': str or None
+        }
+    """
+    # Query seasonal pattern summary
+    pattern_query = """
+        SELECT
+            pattern_type,
+            pattern_strength,
+            overall_confidence,
+            statistical_significance,
+            peak_months,
+            low_months
+        FROM seasonal_patterns_summary
+        WHERE sku_id = %s
+            AND warehouse = %s
+        LIMIT 1
+    """
+
+    pattern_result = execute_query(
+        pattern_query,
+        (sku_id, warehouse),
+        fetch_one=True,
+        fetch_all=False
+    )
+
+    # Default response if no pattern found
+    if not pattern_result:
+        return {
+            'pattern_type': None,
+            'adjustment_factor': 1.0,
+            'approaching_peak': False,
+            'pattern_strength': 0.0,
+            'overall_confidence': 0.0,
+            'statistical_significance': False,
+            'peak_months': None
+        }
+
+    # Extract pattern data
+    pattern_type = pattern_result.get('pattern_type')
+    pattern_strength = float(pattern_result.get('pattern_strength') or 0)
+    overall_confidence = float(pattern_result.get('overall_confidence') or 0)
+    statistical_significance = bool(pattern_result.get('statistical_significance'))
+    peak_months_str = pattern_result.get('peak_months')
+
+    # Check if approaching peak (current month or next month is in peak_months)
+    approaching_peak = False
+    if peak_months_str:
+        try:
+            peak_months = [int(m.strip()) for m in peak_months_str.split(',') if m.strip()]
+            next_month = (order_month % 12) + 1  # Wrap December to January
+            if order_month in peak_months or next_month in peak_months:
+                approaching_peak = True
+        except (ValueError, AttributeError):
+            peak_months = []
+
+    # Validate ALL three reliability criteria
+    meets_strength_threshold = pattern_strength > 0.3
+    meets_confidence_threshold = overall_confidence > 0.6
+    has_statistical_significance = statistical_significance
+
+    # Only apply adjustment if ALL criteria met and approaching peak
+    if (approaching_peak and
+        meets_strength_threshold and
+        meets_confidence_threshold and
+        has_statistical_significance):
+
+        # Dynamic multiplier based on pattern strength
+        if pattern_strength >= 0.5:
+            adjustment_factor = 1.3  # Strong seasonal pattern
+        elif pattern_strength >= 0.3:
+            adjustment_factor = 1.2  # Moderate seasonal pattern
+        else:
+            adjustment_factor = 1.15  # Weak but detectable (shouldn't reach here due to threshold)
+    else:
+        adjustment_factor = 1.0  # No adjustment
+
+    return {
+        'pattern_type': pattern_type,
+        'adjustment_factor': adjustment_factor,
+        'approaching_peak': approaching_peak,
+        'pattern_strength': pattern_strength,
+        'overall_confidence': overall_confidence,
+        'statistical_significance': statistical_significance,
+        'peak_months': peak_months_str
+    }
+
+
 def calculate_safety_stock_monthly(
     sku_id: str,
     warehouse: str,
     daily_demand: float,
-    lead_time_days: int
+    lead_time_days: int,
+    order_month: str
 ) -> int:
     """
     Calculate safety stock for monthly ordering cycle.
@@ -239,14 +496,17 @@ def calculate_safety_stock_monthly(
     - Demand variability (coefficient of variation)
     - Lead time variability
     - ABC-XYZ service level requirements
+    - Seasonal patterns with dynamic multipliers (Phase 2 Intelligence Layer)
 
     Formula: Z * sqrt((demand_std^2 * period) + (demand^2 * lt_cv^2 * period))
+    Then applies ABC buffers and seasonal adjustments.
 
     Args:
         sku_id: SKU identifier
         warehouse: Warehouse code
         daily_demand: Average daily demand
         lead_time_days: P95 lead time in days
+        order_month: Month in YYYY-MM format for seasonal pattern detection
 
     Returns:
         Safety stock quantity (integer)
@@ -299,7 +559,140 @@ def calculate_safety_stock_monthly(
         monthly_buffer = daily_demand * 3.5  # Half week for variable B items
         safety_stock += monthly_buffer
 
+    # Apply seasonal adjustment if approaching peak (Phase 2 Intelligence Layer)
+    # Extract month number from order_month (YYYY-MM format)
+    try:
+        year, month_str = order_month.split('-')
+        month_num = int(month_str)
+    except (ValueError, AttributeError):
+        month_num = datetime.now().month  # Fallback to current month
+
+    seasonal = get_seasonal_adjustment_factor(sku_id, warehouse, month_num)
+
+    # Apply dynamic multiplier if ALL reliability criteria met and approaching peak
+    if (seasonal['approaching_peak'] and
+        seasonal['pattern_strength'] > 0.3 and
+        seasonal['overall_confidence'] > 0.6 and
+        seasonal['statistical_significance']):
+
+        # Dynamic multiplier based on pattern strength
+        safety_stock *= seasonal['adjustment_factor']
+
     return round(safety_stock)
+
+
+def check_stockout_urgency(sku_id: str, order_month: int) -> Dict:
+    """
+    Check if stockout patterns warrant urgency escalation.
+    Uses conservative thresholds from Claude KB recommendations.
+
+    Thresholds:
+    - Chronic: frequency_score > 70 AND confidence_level = 'high'
+    - Seasonal: frequency_score > 50 AND approaching season AND confidence >= 'medium'
+
+    Args:
+        sku_id: SKU identifier
+        order_month: Month number (1-12) for which order is being placed
+
+    Returns:
+        {
+            'has_chronic_pattern': bool,
+            'has_seasonal_pattern': bool,
+            'frequency_score': float (0-100),
+            'confidence_level': str,
+            'escalate_urgency': bool (for chronic),
+            'increase_buffer': bool (for seasonal),
+            'pattern_details': str
+        }
+    """
+    # Query stockout patterns
+    pattern_query = """
+        SELECT
+            pattern_type,
+            pattern_value,
+            frequency_score,
+            confidence_level,
+            last_detected
+        FROM stockout_patterns
+        WHERE sku_id = %s
+        ORDER BY frequency_score DESC
+        LIMIT 10
+    """
+
+    pattern_results = execute_query(
+        pattern_query,
+        (sku_id,),
+        fetch_one=False,
+        fetch_all=True
+    ) or []
+
+    # Initialize response
+    has_chronic = False
+    has_seasonal = False
+    max_frequency = 0.0
+    confidence = 'low'
+    pattern_details = []
+    escalate_urgency = False
+    increase_buffer = False
+
+    for pattern in pattern_results:
+        pattern_type = pattern.get('pattern_type')
+        pattern_value = pattern.get('pattern_value')
+        freq_score = float(pattern.get('frequency_score') or 0)
+        conf_level = pattern.get('confidence_level') or 'low'
+
+        max_frequency = max(max_frequency, freq_score)
+
+        # Check for chronic pattern
+        if pattern_type == 'chronic':
+            has_chronic = True
+            confidence = conf_level
+            pattern_details.append(f"Chronic stockouts (freq={freq_score:.1f}, conf={conf_level})")
+
+            # Escalate if frequency > 70 AND high confidence
+            if freq_score > 70 and conf_level == 'high':
+                escalate_urgency = True
+
+        # Check for seasonal pattern
+        elif pattern_type == 'seasonal' and pattern_value:
+            has_seasonal = True
+
+            # Parse pattern_value (e.g., "april,may,june" or "4,5,6")
+            try:
+                # Try numeric month parsing first
+                seasonal_months = [int(m.strip()) for m in pattern_value.split(',') if m.strip().isdigit()]
+
+                # If no numeric months, try month name parsing
+                if not seasonal_months:
+                    month_names = {'january': 1, 'february': 2, 'march': 3, 'april': 4,
+                                   'may': 5, 'june': 6, 'july': 7, 'august': 8,
+                                   'september': 9, 'october': 10, 'november': 11, 'december': 12}
+                    seasonal_months = [month_names.get(m.strip().lower()) for m in pattern_value.split(',')]
+                    seasonal_months = [m for m in seasonal_months if m is not None]
+
+                # Check if approaching seasonal stockout period
+                next_month = (order_month % 12) + 1
+                is_approaching = order_month in seasonal_months or next_month in seasonal_months
+
+                if is_approaching and freq_score > 50 and conf_level in ['medium', 'high']:
+                    increase_buffer = True
+                    pattern_details.append(f"Seasonal stockouts approaching (months={pattern_value}, freq={freq_score:.1f})")
+
+            except (ValueError, AttributeError):
+                pass
+
+    # Combine pattern details
+    combined_details = "; ".join(pattern_details) if pattern_details else "No significant stockout patterns"
+
+    return {
+        'has_chronic_pattern': has_chronic,
+        'has_seasonal_pattern': has_seasonal,
+        'frequency_score': round(max_frequency, 2),
+        'confidence_level': confidence,
+        'escalate_urgency': escalate_urgency,
+        'increase_buffer': increase_buffer,
+        'pattern_details': combined_details
+    }
 
 
 def determine_monthly_order_timing(
@@ -343,27 +736,48 @@ def determine_monthly_order_timing(
     pending_result = calculate_effective_pending_inventory(sku_id, warehouse, supplier)
     effective_pending = pending_result['total_effective']
 
-    # Get corrected monthly demand
-    demand_query = """
-        SELECT
-            CASE
-                WHEN %s = 'burnaby' THEN corrected_demand_burnaby
-                WHEN %s = 'kentucky' THEN corrected_demand_kentucky
-            END as corrected_demand
-        FROM monthly_sales
-        WHERE sku_id = %s
-        ORDER BY `year_month` DESC
-        LIMIT 1
-    """
-    demand_result = execute_query(demand_query, (warehouse, warehouse, sku_id), fetch_one=True, fetch_all=False)
-    corrected_demand_monthly = float(demand_result.get('corrected_demand')) if demand_result and demand_result.get('corrected_demand') else 0
+    # Get monthly demand - try forecast first, fallback to historical (Phase 2 Intelligence Layer)
+    forecast_result = get_forecast_demand(sku_id, warehouse)
+
+    if forecast_result:
+        # Forecast available - use blended or pure based on confidence
+        demand_monthly = float(forecast_result['demand_monthly'])
+        demand_source = forecast_result['demand_source']  # 'forecast', 'blended', or 'historical'
+        confidence_score = forecast_result['forecast_confidence']
+        blend_weight = forecast_result.get('blend_weight')
+        learning_applied = forecast_result['learning_applied']
+        forecast_run_id = forecast_result.get('forecast_run_id')
+        forecast_method = forecast_result.get('forecast_method')
+    else:
+        # No forecast available - fallback to historical corrected_demand
+        demand_query = """
+            SELECT
+                CASE
+                    WHEN %s = 'burnaby' THEN corrected_demand_burnaby
+                    WHEN %s = 'kentucky' THEN corrected_demand_kentucky
+                END as corrected_demand
+            FROM monthly_sales
+            WHERE sku_id = %s
+            ORDER BY `year_month` DESC
+            LIMIT 1
+        """
+        demand_result = execute_query(demand_query, (warehouse, warehouse, sku_id), fetch_one=True, fetch_all=False)
+        demand_monthly = float(demand_result.get('corrected_demand')) if demand_result and demand_result.get('corrected_demand') else 0
+        demand_source = 'historical'
+        confidence_score = 0.75  # Default confidence for historical
+        blend_weight = None
+        learning_applied = False
+        forecast_run_id = None
+        forecast_method = None
+
+    corrected_demand_monthly = demand_monthly  # Keep this for backward compatibility
 
     # Get actual days in this month
     year, month = order_month.split('-')
     days_in_month = calendar.monthrange(int(year), int(month))[1]
 
     # Calculate daily demand using actual days
-    daily_demand = corrected_demand_monthly / days_in_month if days_in_month > 0 else 0
+    daily_demand = demand_monthly / days_in_month if days_in_month > 0 else 0
 
     # Get lead time from supplier_lead_times
     lt_query = """
@@ -392,6 +806,24 @@ def determine_monthly_order_timing(
         urgency = 'skip'
         decision = 'SKIP'
 
+    # Check stockout patterns for urgency escalation (Phase 2 Intelligence Layer)
+    try:
+        year, month_str = order_month.split('-')
+        month_num = int(month_str)
+    except (ValueError, AttributeError):
+        month_num = datetime.now().month
+
+    stockout_check = check_stockout_urgency(sku_id, month_num)
+
+    # Escalate urgency for chronic stockout patterns (frequency > 70, high confidence)
+    if stockout_check['escalate_urgency']:
+        if urgency == 'optional':
+            urgency = 'should_order'
+            decision = 'SHOULD_ORDER'
+        elif urgency == 'should_order':
+            urgency = 'must_order'
+            decision = 'MUST_ORDER'
+
     # Calculate order quantity if not skipping
     order_qty = 0
     stockout_risk_date = None
@@ -402,8 +834,8 @@ def determine_monthly_order_timing(
         target_coverage_days = lead_time_days + 60
         target_inventory = daily_demand * target_coverage_days
 
-        # Add safety stock
-        safety_stock = calculate_safety_stock_monthly(sku_id, warehouse, daily_demand, lead_time_days)
+        # Add safety stock (with seasonal adjustment if applicable)
+        safety_stock = calculate_safety_stock_monthly(sku_id, warehouse, daily_demand, lead_time_days, order_month)
         target_inventory += safety_stock
 
         # Calculate order quantity
@@ -431,7 +863,13 @@ def determine_monthly_order_timing(
         'corrected_demand_monthly': corrected_demand_monthly,
         'days_in_month': days_in_month,
         'lead_time_days': lead_time_days,
-        'safety_stock_qty': calculate_safety_stock_monthly(sku_id, warehouse, daily_demand, lead_time_days)
+        'safety_stock_qty': calculate_safety_stock_monthly(sku_id, warehouse, daily_demand, lead_time_days, order_month),
+        # Phase 2 Intelligence Layer metadata
+        'forecast_demand_monthly': demand_monthly if demand_source in ['forecast', 'blended'] else None,
+        'demand_source': demand_source,
+        'forecast_confidence_score': confidence_score,
+        'blend_weight': blend_weight,
+        'learning_adjustment_applied': learning_applied
     }
 
 
@@ -483,6 +921,9 @@ def generate_monthly_recommendations(
                 sku['sku_id'], warehouse, sku['supplier'], order_month
             )
 
+            # Small delay to prevent socket exhaustion on Windows (WinError 10048)
+            time.sleep(0.001)  # 1ms delay per SKU-warehouse combination
+
             # Special handling for Death Row SKUs
             if sku['status'] == 'Death Row' and result['decision'] != 'MUST_ORDER':
                 result['decision'] = 'SKIP'
@@ -502,14 +943,18 @@ def generate_monthly_recommendations(
                     pending_breakdown, corrected_demand_monthly, safety_stock_qty,
                     reorder_point, order_month, days_in_month, lead_time_days_default,
                     coverage_months, urgency_level, overdue_pending_count,
-                    stockout_risk_date
+                    stockout_risk_date,
+                    forecast_demand_monthly, demand_source, forecast_confidence_score,
+                    blend_weight, learning_adjustment_applied
                 ) VALUES (
                     %s, %s, %s, %s, %s,
                     %s, %s, %s,
                     %s, %s, %s,
                     %s, %s, %s, %s,
                     %s, %s, %s,
-                    %s
+                    %s,
+                    %s, %s, %s,
+                    %s, %s
                 )
                 ON DUPLICATE KEY UPDATE
                     suggested_qty = VALUES(suggested_qty),
@@ -527,6 +972,11 @@ def generate_monthly_recommendations(
                     urgency_level = VALUES(urgency_level),
                     overdue_pending_count = VALUES(overdue_pending_count),
                     stockout_risk_date = VALUES(stockout_risk_date),
+                    forecast_demand_monthly = VALUES(forecast_demand_monthly),
+                    demand_source = VALUES(demand_source),
+                    forecast_confidence_score = VALUES(forecast_confidence_score),
+                    blend_weight = VALUES(blend_weight),
+                    learning_adjustment_applied = VALUES(learning_adjustment_applied),
                     updated_at = CURRENT_TIMESTAMP
             """
 
@@ -549,7 +999,12 @@ def generate_monthly_recommendations(
                 result['coverage_months'],
                 result['urgency_level'],
                 result['overdue_pending_count'],
-                result['stockout_risk_date']
+                result['stockout_risk_date'],
+                result.get('forecast_demand_monthly'),
+                result.get('demand_source'),
+                result.get('forecast_confidence_score'),
+                result.get('blend_weight'),
+                result.get('learning_adjustment_applied', False)
             ), fetch_one=False, fetch_all=False)
 
             # Update summary counts

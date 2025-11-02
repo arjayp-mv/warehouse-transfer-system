@@ -14,14 +14,16 @@ Key Features:
 """
 
 from fastapi import APIRouter, HTTPException, Query
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
 from typing import Optional
 from datetime import datetime
 import json
 import logging
+import csv
+import io
 
 from backend.database import execute_query, get_database_connection
-from backend.supplier_ordering_calculations import generate_monthly_recommendations
+from backend.supplier_ordering_calculations_batched import generate_monthly_recommendations_batched
 from backend.supplier_ordering_models import (
     GenerateRecommendationsRequest,
     GenerateRecommendationsResponse,
@@ -63,8 +65,8 @@ async def generate_recommendations(request: GenerateRecommendationsRequest):
         HTTPException: If generation fails due to data issues
     """
     try:
-        # Generate recommendations using core calculation engine
-        result = generate_monthly_recommendations(order_month=request.order_month)
+        # Generate recommendations using batched calculation engine (optimized)
+        result = generate_monthly_recommendations_batched(order_month=request.order_month)
 
         # Calculate total value of suggestions
         total_value_query = """
@@ -557,4 +559,121 @@ async def export_to_excel(order_month: str):
         raise HTTPException(
             status_code=500,
             detail=f"Failed to generate Excel export: {str(e)}"
+        )
+
+
+@router.get("/{order_month}/csv")
+async def export_to_csv(
+    order_month: str,
+    warehouse: str = Query(None, description="Filter by warehouse (burnaby/kentucky)"),
+    supplier: str = Query(None, description="Filter by supplier name"),
+    urgency: str = Query(None, description="Filter by urgency level")
+):
+    """
+    Export supplier order recommendations to CSV format.
+
+    V10.0 Feature: CSV export with same filtering as UI
+    - Simple CSV format for import into other tools
+    - Same data as Excel export
+    - Applies warehouse, supplier, and urgency filters
+
+    Args:
+        order_month: Order month in YYYY-MM format
+        warehouse: Optional warehouse filter
+        supplier: Optional supplier filter
+        urgency: Optional urgency level filter
+
+    Returns:
+        CSV file for download
+
+    Raises:
+        HTTPException: If order_month format is invalid or export fails
+    """
+    try:
+        # Validate order_month format
+        datetime.strptime(order_month, "%Y-%m")
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid order_month format. Use YYYY-MM"
+        )
+
+    try:
+        # Build query with filters
+        query = """
+            SELECT
+                soc.sku_id,
+                s.description,
+                soc.warehouse,
+                soc.supplier,
+                soc.current_inventory,
+                soc.pending_orders_effective,
+                soc.suggested_qty,
+                soc.confirmed_qty,
+                COALESCE(soc.lead_time_days_override, soc.lead_time_days_default) as lead_time_days,
+                COALESCE(soc.expected_arrival_override, soc.expected_arrival_calculated) as expected_arrival,
+                soc.coverage_months,
+                soc.urgency_level,
+                s.abc_code,
+                s.xyz_code,
+                s.cost_per_unit,
+                soc.suggested_qty * s.cost_per_unit as suggested_value,
+                soc.confirmed_qty * s.cost_per_unit as confirmed_value,
+                soc.notes
+            FROM supplier_order_confirmations soc
+            LEFT JOIN skus s ON soc.sku_id = s.sku_id
+            WHERE soc.order_month = %s
+        """
+        params = [order_month]
+
+        # Apply filters
+        if warehouse:
+            query += " AND soc.warehouse = %s"
+            params.append(warehouse)
+        if supplier:
+            query += " AND soc.supplier = %s"
+            params.append(supplier)
+        if urgency:
+            query += " AND soc.urgency_level = %s"
+            params.append(urgency)
+
+        query += " ORDER BY soc.supplier, soc.sku_id"
+
+        # Execute query
+        orders = execute_query(query, tuple(params), fetch_one=False, fetch_all=True) or []
+
+        # Create CSV in memory
+        output = io.StringIO()
+        if orders:
+            # Get fieldnames from first row
+            fieldnames = list(orders[0].keys())
+            writer = csv.DictWriter(output, fieldnames=fieldnames)
+
+            writer.writeheader()
+            for order in orders:
+                # Convert None values to empty strings
+                row = {k: (str(v) if v is not None else '') for k, v in order.items()}
+                writer.writerow(row)
+
+        output.seek(0)
+
+        # Prepare filename
+        filename = f"supplier_orders_{order_month}.csv"
+
+        logger.info(f"Generated CSV export with {len(orders)} orders for {order_month}")
+
+        # Return as downloadable file
+        return StreamingResponse(
+            iter([output.getvalue()]),
+            media_type="text/csv",
+            headers={
+                "Content-Disposition": f"attachment; filename={filename}"
+            }
+        )
+
+    except Exception as e:
+        logger.error(f"Failed to generate CSV export: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to generate CSV export: {str(e)}"
         )

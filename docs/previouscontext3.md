@@ -1,186 +1,136 @@
-  Current Task
+  Current Status: Nearly Complete - One Final Verification Needed
 
-  Testing the V9.0 Supplier Ordering System using Playwright MCP, specifically completing end-to-end testing of the supplier ordering UI and      
-  API.
+  What Was Being Fixed
 
-  What Was Accomplished
+  The user requested continuation of 6 issues with the SKU Details modal in the Supplier Ordering interface (documented in        
+  docs/previouscontext2.md). The main issue was pending_orders_effective calculation showing 0 instead of ~762 for SKU 
+  UB-YTX14-BS at Burnaby warehouse.
 
-  1. Fixed Database Connection Pattern (COMPLETED)
+  Root Cause Identified and Fixed
 
-  Problem: The supplier ordering API was written using SQLAlchemy ORM pattern (from database import get_db, Session, text(), :param style) but    
-   the project uses direct PyMySQL connections.
+  Problem: backend/supplier_ordering_calculations.py had two issues:
+  1. Line 88 filtered out records with NULL expected_arrival
+  2. Confidence calculation didn't account for is_estimated field (0.65 for estimated vs 0.85 for confirmed orders)
 
-  Files Fixed:
-  - backend/supplier_ordering_api.py (518 lines) - Completely refactored
-  - backend/supplier_ordering_queries.py (160 lines) - Converted from SQLAlchemy to plain SQL
+  Solution Applied:
+  - Modified SQL query (lines 69-90) to use COALESCE(expected_arrival, DATE_ADD(order_date, INTERVAL lead_time_days DAY))
+  - Added base_confidence calculation: CASE WHEN is_estimated = 1 THEN 0.65 ELSE 0.85 END
+  - Updated three confidence calculation loops (lines 168-220) to multiply by base_confidence
+  - Added float() conversion to prevent Decimal/float TypeError
 
-  Changes Made:
-  - Changed imports from from database import get_db to from backend.database import execute_query
-  - Removed all SQLAlchemy imports (Session, text(), Depends(get_db))
-  - Removed dependency injection pattern from all 7 endpoints
-  - Changed parameterized query format from :param_name to %s
-  - Changed params from dict to tuple format
-  - Changed execute_query calls from fetch_mode='one' to fetch_one=True, fetch_all=False
-  - Changed execute_query calls from fetch_mode='all' to fetch_one=False, fetch_all=True
-  - Changed execute_query calls from fetch_mode='none' to fetch_one=False, fetch_all=False
-  - Removed all db.commit() calls (execute_query handles commits automatically)
+  Result: Pending calculation now works correctly, showing 762 units instead of 0.
 
-  2. Fixed Column Name Mismatch (COMPLETED)
+  Testing Results (5 of 6 Issues Verified Fixed)
 
-  Problem: Queries referenced s.unit_cost but the actual column name in the skus table is cost_per_unit.
+  ✅ Main Table Verification
 
-  Files Fixed:
-  - backend/supplier_ordering_queries.py - All 3 queries (build_orders_query, stats_query, supplier_query)
-  - backend/supplier_ordering_api.py - generate_recommendations endpoint
+  - SKU: UB-YTX14-BS, Warehouse: Burnaby
+  - Current Stock: 8355 ✓
+  - Pending (Eff): 762 ✓ (was 0 before fix)
+  - Lead Time: 60 days ✓
 
-  Changes Made:
-  - Changed all references from s.unit_cost to s.cost_per_unit
-  - Changed all references from s.unit_cost in calculations to s.cost_per_unit
+  ✅ SKU Details Modal - Tabs Verified
+
+  1. Pending Orders Tab: Shows 2000 units, Expected 1/7/2026 ✓
+  2. Stockout History Tab: Warehouse-filtered correctly (Burnaby only) ✓
+  3. 12-Month Forecast Tab: Chart doesn't expand on multiple clicks ✓
+
+  ⏳ Overview Tab - Needs Cache Verification
+
+  - Current Issue: Still showing "Pending (Effective): 0"
+  - Root Cause: Field name mismatch - frontend used effective_pending but API returns pending_orders_effective
+  - Fix Applied: Modified frontend/supplier-ordering.js lines 594-599 to use correct field name
+  - Status: Code fixed but browser cache preventing verification
+
+  Frontend Fix Details
+
+  File: frontend/supplier-ordering.jsLines: 594-599
+
+  Changed from:
+  <p><strong>Pending (Effective):</strong> ${order.effective_pending || 0}</p>
+  <p><strong>Total Available:</strong> ${(order.current_inventory || 0) + (order.effective_pending || 0)}</p>
+
+  Changed to:
+  <p><strong>Pending (Effective):</strong> ${order.pending_orders_effective || 0}</p>
+  <p><strong>Total Available:</strong> ${(order.current_inventory || 0) + (order.pending_orders_effective || 0)}</p>
 
   What Still Needs to Be Done
 
-  1. CRITICAL: Server Reload Required
+  Single Remaining Task: Verify the Overview tab fix after browser cache clears.
 
-  The server detected file changes and started reloading but the reload may not have completed. You need to:
+  Steps to Complete:
+  1. Navigate to: http://localhost:8000/static/supplier-ordering.html
+  2. Use Playwright to do a hard refresh: Ctrl+Shift+R or clear cache
+  3. Click "Generate Recommendations" if table is empty
+  4. Find SKU UB-YTX14-BS for warehouse burnaby
+  5. Click the "Details" button (blue eye icon)
+  6. Verify Overview tab shows:
+    - Current Inventory: 8355
+    - Pending (Effective): 762 (currently shows 0 due to cache)
+    - Total Available: 9117
 
-  Action: Check if server reload completed successfully by looking for this line in server logs:
-  INFO - Supplier ordering API routes loaded successfully
+  Expected Outcome: Once cache clears, Overview tab should show 762, confirming all 6 original issues are resolved.
 
-  If not present, restart the server manually:
-  cd "C:\Users\Arjay\Downloads\warehouse-transfer"
-  python -m uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload
+  Server Status
 
-  2. Test the API Endpoint
+  - Server is running on port 8000 (background process)
+  - No restart needed - frontend-only change
+  - User manually restarted server twice during previous fixes
 
-  Once server is running, refresh the Playwright browser at:
-  http://localhost:8000/static/supplier-ordering.html
+  Key Database Context
 
-  Expected Result: Page should load without the "Unable to load order recommendations" alert.
+  Testing SKU: UB-YTX14-BSWarehouse: burnabyPending Inventory Record: 2000 units with is_estimated=1 (65% confidence)Expected     
+  Calculation: 2000 × 0.65 × (time/reliability factors) ≈ 762 units
 
-  Current Status: Last API call returned 500 error with "Unknown column 's.unit_cost'" but this was BEFORE the latest fixes were applied.
+  API Endpoint: /api/supplier-ordering/recommendations/35 returns:
+  {
+    "sku_id": "UB-YTX14-BS",
+    "warehouse": "burnaby",
+    "current_inventory": 8355,
+    "pending_orders_effective": 762,  // ← This is the correct field name
+    ...
+  }
 
-  3. Complete Playwright Testing Checklist
+  Files Modified This Session
 
-  Once the API works, complete these tests using Playwright MCP:
+  1. ✅ backend/supplier_ordering_calculations.py (lines 69-220) - COMPLETED & TESTED
+  2. ✅ frontend/supplier-ordering.js (lines 594-599) - COMPLETED, needs cache verification
 
-  Basic UI Tests:
+  Original 6 Issues Status
 
-  - Page loads successfully ✓ (completed)
-  - Page structure displays correctly ✓ (completed)
-  - API call succeeds without errors
-  - Summary cards display data (instead of "--")
-  - Filter dropdowns populate
-  - DataTable displays order rows
+  1. ✅ Stockout history warehouse filter - FIXED (previous session)
+  2. ✅ Chart.js expanding bug - FIXED (previous session)
+  3. ✅ Pending field name mismatch - FIXED (previous session)
+  4. ✅ Label improvements - FIXED (previous session)
+  5. ✅ Pending (Effective) calculation - FIXED THIS SESSION
+  6. ⏳ Overview tab display - FIXED IN CODE, awaiting cache verification
 
-  Generate Recommendations Test:
+  Quick Start Commands for New Instance
 
-  - Click "Generate Recommendations" button
-  - Verify loading overlay appears
-  - Verify API POST to /api/supplier-orders/generate succeeds
-  - Verify summary cards update with counts
-  - Verify table populates with data
+  # If server isn't running:
+  cd C:\Users\Arjay\Downloads\warehouse-transfer
+  python -m uvicorn backend.main:app --reload --port 8000
 
-  Filter Tests:
+  # Test URL:
+  # http://localhost:8000/static/supplier-ordering.html
 
-  - Test warehouse filter dropdown
-  - Test supplier filter dropdown
-  - Test urgency level filter dropdown
-  - Test SKU search box
+  Verification Script for Playwright
 
-  Inline Editing Tests:
+  // Navigate and hard refresh
+  await browser_navigate({url: 'http://localhost:8000/static/supplier-ordering.html'});
+  await browser_press_key({key: 'F5'});  // Or use Ctrl+Shift+R
 
-  - Click and edit confirmed_qty field
-  - Verify auto-save after 500ms
-  - Test lead_time_days_override editing
-  - Test expected_arrival_override date picker
-  - Test notes field editing
+  // Wait for table to load, click Details for UB-YTX14-BS
+  // Check Overview tab: "Pending (Effective): 762"
 
-  Lock/Unlock Tests:
+  Critical Notes
 
-  - Click lock button on an order
-  - Verify lock icon changes state
-  - Verify editable fields become disabled
-  - Click unlock button
-  - Verify fields become editable again
+  - DO NOT modify backend code again - calculations are correct and tested
+  - DO NOT restart server - not needed for frontend changes
+  - ONLY need to verify browser shows updated JavaScript after cache clears
+  - Main table already shows correct value (762), just modal Overview tab cached
 
-  SKU Details Modal Tests:
+  Success Criteria
 
-  - Click SKU link to open modal
-  - Verify Overview tab displays
-  - Click Pending Orders tab
-  - Click 12-Month Forecast tab
-  - Click Stockout History tab
-  - Test modal close functionality
-
-  Excel Export Test:
-
-  - Click "Export to Excel" button
-  - Verify file download triggers
-  - Verify success message appears
-
-  4. Document Test Results
-
-  After testing, update the todo list using TodoWrite tool to mark tasks as completed.
-
-  Current Todo List Status
-
-  1. [in_progress] Test supplier ordering UI components (filters, table, modal structure)
-  2. [completed] Fix supplier_ordering_api.py database imports (use execute_query instead of get_db)
-  3. [in_progress] Test API endpoints after fixing imports
-  4. [pending] Test end-to-end workflow (generate, edit, lock, export)
-
-  Key Technical Details
-
-  Database Connection Pattern (CORRECT)
-
-  from backend.database import execute_query
-
-  # For single row:
-  result = execute_query(query, (param1, param2), fetch_one=True, fetch_all=False)
-
-  # For multiple rows:
-  results = execute_query(query, (param1, param2), fetch_one=False, fetch_all=True)
-
-  # For INSERT/UPDATE/DELETE:
-  execute_query(query, (param1, param2), fetch_one=False, fetch_all=False)
-
-  Query Parameter Format (CORRECT)
-
-  # Use %s placeholders
-  query = "SELECT * FROM table WHERE id = %s AND name = %s"
-  params = (123, "test")  # Tuple, not dict
-
-  # NOT this:
-  query = "SELECT * FROM table WHERE id = :id AND name = :name"  # WRONG
-  params = {"id": 123, "name": "test"}  # WRONG
-
-  Column Names (CORRECT)
-
-  - Use s.cost_per_unit NOT s.unit_cost
-  - Table: skus, Column: cost_per_unit
-
-  Files Modified
-
-  1. backend/supplier_ordering_api.py - 518 lines, completely refactored
-  2. backend/supplier_ordering_queries.py - 160 lines, removed SQLAlchemy, fixed column names
-  3. No frontend changes needed - the issue was entirely backend
-
-  Server Information
-
-  - Running on: http://localhost:8000
-  - Test Page: http://localhost:8000/static/supplier-ordering.html
-  - Background Bash ID: cb0619 (may have multiple old IDs: e65a05, da4779, 179282)
-
-  Next Immediate Steps
-
-  1. Check server reload status
-  2. Refresh browser page
-  3. Check console for errors
-  4. If API works: Begin systematic Playwright testing
-  5. If API fails: Check server logs for specific error and fix
-
-  Known Good State
-
-  - Server loads supplier ordering API module successfully
-  - Page structure renders correctly
-  - Issue is database query execution, which should now be fixed pending server reload
+  When you see "Pending (Effective): 762" in the SKU Details modal Overview tab for UB-YTX14-BS Burnaby, all issues are
+  resolved. Mark task as COMPLETED and inform user all 6 original issues are now fixed.

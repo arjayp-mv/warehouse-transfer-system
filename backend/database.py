@@ -143,6 +143,39 @@ def _execute_query_direct(query: str,
         raise
 
 
+def execute_many(query: str, params_list: List[tuple]) -> int:
+    """
+    Execute a query multiple times with different parameters (batch insert/update)
+
+    This is optimized for bulk INSERT/UPDATE operations and uses executemany
+    for better performance than multiple individual queries.
+
+    Args:
+        query: SQL query with placeholders
+        params_list: List of tuples, each containing parameters for one execution
+
+    Returns:
+        Number of rows affected
+
+    Example:
+        query = "INSERT INTO table (col1, col2) VALUES (%s, %s)"
+        params = [(val1a, val2a), (val1b, val2b), (val1c, val2c)]
+        rows_affected = execute_many(query, params)
+    """
+    try:
+        db = get_database_connection()
+        cursor = db.cursor()
+        cursor.executemany(query, params_list)
+        rows_affected = cursor.rowcount
+        db.commit()
+        db.close()
+        return rows_affected
+
+    except Exception as e:
+        logger.error(f"Batch query execution failed: {e}")
+        raise
+
+
 def get_connection_pool_status() -> Dict[str, Any]:
     """
     Get connection pool status and statistics

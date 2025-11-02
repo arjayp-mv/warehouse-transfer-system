@@ -126,6 +126,16 @@ except ImportError as e:
 except Exception as e:
     logger.error(f"Error setting up supplier management routes: {e}")
 
+# Setup Supplier Ordering SKU Details API Routes (V10.0 SKU detail endpoints)
+try:
+    from backend.supplier_ordering_sku_details import router as sku_details_router
+    app.include_router(sku_details_router)
+    logger.info("Supplier ordering SKU details API routes loaded successfully")
+except ImportError as e:
+    logger.warning(f"Supplier ordering SKU details module not available: {e}")
+except Exception as e:
+    logger.error(f"Error setting up supplier ordering SKU details routes: {e}")
+
 # =============================================================================
 # API ENDPOINTS - WAREHOUSE TRANSFER PLANNING TOOL
 # =============================================================================
@@ -1504,6 +1514,10 @@ async def import_pending_orders_from_csv(
             quantity_str = row.get('quantity', '').strip()
             destination = row.get('destination', '').strip().lower()
 
+            # Parse supplier from "order_type" column (CSV naming is confusing)
+            # The CSV column is named "order_type" but actually contains supplier name
+            supplier = row.get('order_type', '').strip() or None
+
             if not sku_id or not quantity_str or not destination:
                 continue
 
@@ -1568,6 +1582,7 @@ async def import_pending_orders_from_csv(
                 "expected_arrival": expected_arrival_iso,
                 "is_estimated": is_estimated,
                 "order_type": "supplier",
+                "supplier": supplier,
                 "status": row.get('status', 'ordered').lower(),
                 "notes": row.get('notes', '').strip() or None
             }
@@ -1633,8 +1648,8 @@ async def import_pending_orders_from_csv(
                     cursor.execute("""
                         INSERT INTO pending_inventory
                         (sku_id, quantity, destination, order_date, expected_arrival,
-                         order_type, status, lead_time_days, is_estimated, notes)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                         order_type, supplier, status, lead_time_days, is_estimated, notes)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """, (
                         order_data["sku_id"],
                         order_data["quantity"],
@@ -1642,6 +1657,7 @@ async def import_pending_orders_from_csv(
                         order_data["order_date"],
                         order_data["expected_arrival"],
                         order_data["order_type"],
+                        order_data.get("supplier"),
                         order_data["status"],
                         120,  # Default lead time
                         order_data["is_estimated"],
