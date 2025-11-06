@@ -270,7 +270,25 @@ class ForecastJobWorker:
                 error_message='Job cancelled by user'
             )
             self.is_running = False
+            logger.info(f"Worker: Successfully cancelled forecast job {run_id}")
             return True
+
+        # Log why cancellation failed for debugging
+        if not self.is_running:
+            logger.warning(
+                f"Worker: Cannot cancel forecast {run_id} - worker is not running. "
+                f"Current job ID: {self.current_job_id}, Is running: {self.is_running}"
+            )
+        elif self.current_job_id != run_id:
+            logger.warning(
+                f"Worker: Cannot cancel forecast {run_id} - job ID mismatch. "
+                f"Current job ID: {self.current_job_id}, Requested: {run_id}, Is running: {self.is_running}"
+            )
+        else:
+            logger.error(
+                f"Worker: Unexpected cancellation failure for forecast {run_id}. "
+                f"Current job ID: {self.current_job_id}, Is running: {self.is_running}"
+            )
 
         return False
 

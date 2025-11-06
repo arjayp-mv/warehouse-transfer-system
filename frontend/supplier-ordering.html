@@ -375,6 +375,16 @@ Features: Order generation, inline editing, urgency levels, Excel export
                                 <i class="fas fa-exclamation-triangle me-1"></i>Stockout History
                             </button>
                         </li>
+                        <li class="nav-item" role="presentation">
+                            <button class="nav-link" id="coverage-timeline-tab" data-bs-toggle="tab" data-bs-target="#coverage-timeline" type="button" role="tab">
+                                <i class="fas fa-calendar-alt me-1"></i>Coverage Timeline
+                            </button>
+                        </li>
+                        <li class="nav-item" role="presentation">
+                            <button class="nav-link" id="supplier-performance-tab" data-bs-toggle="tab" data-bs-target="#supplier-performance" type="button" role="tab">
+                                <i class="fas fa-truck me-1"></i>Supplier Performance
+                            </button>
+                        </li>
                     </ul>
 
                     <!-- Tab Content -->
@@ -404,6 +414,20 @@ Features: Order generation, inline editing, urgency levels, Excel export
                         <div class="tab-pane fade" id="stockout" role="tabpanel">
                             <div id="stockout-content">
                                 <p class="text-muted">Click to load stockout history...</p>
+                            </div>
+                        </div>
+
+                        <!-- Coverage Timeline Tab (V10.0 Phase 3) -->
+                        <div class="tab-pane fade" id="coverage-timeline" role="tabpanel">
+                            <div id="coverage-timeline-content">
+                                <p class="text-muted">Click to load coverage timeline...</p>
+                            </div>
+                        </div>
+
+                        <!-- Supplier Performance Tab (V10.0 Phase 3) -->
+                        <div class="tab-pane fade" id="supplier-performance" role="tabpanel">
+                            <div id="supplier-performance-content">
+                                <p class="text-muted">Click to load supplier performance...</p>
                             </div>
                         </div>
                     </div>

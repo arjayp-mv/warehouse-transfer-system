@@ -126,7 +126,8 @@ class DatabaseConnectionPool:
                 pool_recycle=self.pool_recycle,
                 pool_pre_ping=True,  # Verify connections before use
                 echo=False,  # Set to True for SQL debugging
-                future=True
+                future=True,
+                isolation_level="AUTOCOMMIT"  # Match PyMySQL autocommit behavior
             )
 
             # Test the connection
@@ -240,8 +241,8 @@ class DatabaseConnectionPool:
 
                 # Handle different fetch modes
                 if query.strip().upper().startswith(('INSERT', 'UPDATE', 'DELETE')):
-                    # For modification queries, commit and return affected rows
-                    conn.commit()
+                    # For modification queries, return affected rows
+                    # Note: No manual commit needed - using AUTOCOMMIT isolation level
                     return result.rowcount
 
                 elif fetch_one:

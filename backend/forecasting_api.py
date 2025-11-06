@@ -674,13 +674,44 @@ async def cancel_forecast_run(run_id: int):
                 "status": "cancelled"
             }
 
-        # Handle running forecasts - use worker cancel
+        # Handle running forecasts - use worker cancel with database fallback
         elif current_status == 'running':
             success = cancel_forecast(run_id)
-            if not success:
-                raise HTTPException(status_code=500, detail="Failed to cancel running forecast")
 
-            return {"message": f"Forecast '{forecast_name}' cancelled successfully"}
+            if not success:
+                # Worker couldn't cancel (process crashed or restarted)
+                # Fallback: directly update database status
+                logger.warning(
+                    f"Worker failed to cancel forecast {run_id} ('{forecast_name}'). "
+                    f"Falling back to direct database update."
+                )
+
+                update_query = """
+                    UPDATE forecast_runs
+                    SET status = 'cancelled',
+                        completed_at = NOW(),
+                        error_message = 'Cancelled by user (force-cancelled due to stuck process)'
+                    WHERE id = %s AND status = 'running'
+                """
+                execute_query(update_query, params=(run_id,))
+
+                logger.info(
+                    f"API: Force-cancelled stuck forecast {run_id} ('{forecast_name}') "
+                    f"via direct database update"
+                )
+
+                return {
+                    "message": f"Forecast '{forecast_name}' force-cancelled successfully (process was stuck)",
+                    "run_id": run_id,
+                    "status": "cancelled",
+                    "force_cancelled": True
+                }
+
+            return {
+                "message": f"Forecast '{forecast_name}' cancelled successfully",
+                "run_id": run_id,
+                "status": "cancelled"
+            }
 
         else:
             raise HTTPException(
@@ -692,6 +723,84 @@ async def cancel_forecast_run(run_id: int):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to cancel forecast: {str(e)}")
+
+
+@router.post("/runs/{run_id}/force-reset")
+async def force_reset_forecast_run(run_id: int):
+    """
+    Emergency force-reset endpoint for stuck forecast runs.
+
+    This endpoint bypasses worker process checks and directly updates
+    the database status. Use this only when a forecast is stuck and
+    the normal cancel endpoint fails.
+
+    Args:
+        run_id: Forecast run ID to force-reset
+
+    Returns:
+        Success message with reset details
+    """
+    try:
+        # Check forecast exists and get current status
+        check_query = "SELECT status, forecast_name, started_at, processed_skus, total_skus FROM forecast_runs WHERE id = %s"
+        result = execute_query(check_query, params=(run_id,), fetch_all=True)
+
+        if not result:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Forecast run {run_id} not found"
+            )
+
+        current_status = result[0]['status']
+        forecast_name = result[0]['forecast_name']
+        started_at = result[0]['started_at']
+        processed_skus = result[0]['processed_skus']
+        total_skus = result[0]['total_skus']
+
+        # Only allow force-reset for running or pending status
+        if current_status not in ['running', 'pending']:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Cannot force-reset forecast in status '{current_status}'. Only running or pending forecasts need force-reset."
+            )
+
+        # Directly update database status
+        update_query = """
+            UPDATE forecast_runs
+            SET status = 'cancelled',
+                completed_at = NOW(),
+                error_message = CONCAT(
+                    'Force-reset by administrator. ',
+                    'Original status: ', %s, '. ',
+                    'Processed ', %s, ' of ', %s, ' SKUs.'
+                )
+            WHERE id = %s
+        """
+        execute_query(
+            update_query,
+            params=(current_status, processed_skus or 0, total_skus or 0, run_id)
+        )
+
+        logger.warning(
+            f"FORCE-RESET: Forecast {run_id} ('{forecast_name}') "
+            f"force-reset from '{current_status}' to 'cancelled' by administrator. "
+            f"Progress: {processed_skus}/{total_skus} SKUs"
+        )
+
+        return {
+            "message": f"Forecast '{forecast_name}' force-reset successfully",
+            "run_id": run_id,
+            "previous_status": current_status,
+            "new_status": "cancelled",
+            "processed_skus": processed_skus,
+            "total_skus": total_skus,
+            "warning": "This was an emergency force-reset. Check logs for details."
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to force-reset forecast: {str(e)}")
 
 
 @router.post("/runs/bulk-delete")

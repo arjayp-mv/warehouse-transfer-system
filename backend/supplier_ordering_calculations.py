@@ -47,6 +47,157 @@ SERVICE_LEVELS = {
 REVIEW_PERIOD_DAYS = 30
 
 
+def get_supplier_lead_time_with_fallback(
+    supplier: str,
+    primary_warehouse: str
+) -> Dict:
+    """
+    Get supplier lead time with intelligent cross-warehouse and real-time calculation fallback.
+
+    Implements 5-tier fallback strategy to handle suppliers with missing data:
+    1. Check primary warehouse supplier_lead_times (pre-calculated cache)
+    2. Check opposite warehouse supplier_lead_times (cross-warehouse fallback)
+    3. Calculate from primary warehouse supplier_shipments (real-time from historical data)
+    4. Calculate from opposite warehouse supplier_shipments (cross-warehouse historical data)
+    5. Use 120 days (business standard from data-management.html for truly new suppliers)
+
+    This prevents incorrect order calculations when Kentucky has no pre-calculated data
+    but Burnaby has historical supplier shipment metrics.
+
+    Args:
+        supplier: Supplier name
+        primary_warehouse: Primary warehouse to check first ('burnaby' or 'kentucky')
+
+    Returns:
+        Dict with:
+        - p95_lead_time: int (P95 lead time in days, defaults to 120 if no data)
+        - reliability_score: float (0.0-1.0, defaults to 0.70 if no data)
+        - data_source: str ('primary_cached', 'fallback_cached', 'primary_calculated',
+                            'fallback_calculated', or 'default')
+        - source_warehouse: str (which warehouse data came from, or 'none' for default)
+
+    Example:
+        # JUN AN supplier: Kentucky has no data, but Burnaby has 9 historical shipments
+        result = get_supplier_lead_time_with_fallback('JUN AN', 'kentucky')
+        # Returns: {'p95_lead_time': 126, 'reliability_score': 0.78,
+        #           'data_source': 'fallback_calculated', 'source_warehouse': 'burnaby'}
+    """
+    # Determine opposite warehouse for fallback
+    opposite_warehouse = 'kentucky' if primary_warehouse == 'burnaby' else 'burnaby'
+
+    # Tier 1: Try primary warehouse pre-calculated data
+    primary_query = """
+        SELECT p95_lead_time, reliability_score
+        FROM supplier_lead_times
+        WHERE supplier = %s
+          AND destination = %s
+    """
+    primary_result = execute_query(
+        primary_query,
+        (supplier, primary_warehouse),
+        fetch_one=True,
+        fetch_all=False
+    )
+
+    if primary_result and primary_result.get('p95_lead_time') is not None:
+        return {
+            'p95_lead_time': int(primary_result.get('p95_lead_time')),
+            'reliability_score': float(primary_result.get('reliability_score') or 70) / 100,
+            'data_source': 'primary_cached',
+            'source_warehouse': primary_warehouse
+        }
+
+    # Tier 2: Try opposite warehouse pre-calculated data
+    fallback_result = execute_query(
+        primary_query,
+        (supplier, opposite_warehouse),
+        fetch_one=True,
+        fetch_all=False
+    )
+
+    if fallback_result and fallback_result.get('p95_lead_time') is not None:
+        return {
+            'p95_lead_time': int(fallback_result.get('p95_lead_time')),
+            'reliability_score': float(fallback_result.get('reliability_score') or 70) / 100,
+            'data_source': 'fallback_cached',
+            'source_warehouse': opposite_warehouse
+        }
+
+    # Tier 3: Calculate from primary warehouse historical shipments
+    shipment_query = """
+        SELECT
+            AVG(actual_lead_time) as avg_lead_time,
+            STDDEV(actual_lead_time) as std_dev_lead_time,
+            COUNT(*) as shipment_count
+        FROM supplier_shipments
+        WHERE supplier = %s
+          AND destination = %s
+          AND actual_lead_time IS NOT NULL
+          AND order_date >= DATE_SUB(CURDATE(), INTERVAL 12 MONTH)
+    """
+
+    primary_shipments = execute_query(
+        shipment_query,
+        (supplier, primary_warehouse),
+        fetch_one=True,
+        fetch_all=False
+    )
+
+    if primary_shipments and primary_shipments.get('shipment_count', 0) > 0:
+        avg = float(primary_shipments.get('avg_lead_time', 0)) if primary_shipments.get('avg_lead_time') else 0
+        std_dev = float(primary_shipments.get('std_dev_lead_time', 0)) if primary_shipments.get('std_dev_lead_time') else 0
+
+        if avg > 0:
+            # Calculate P95 using normal distribution approximation (avg + 1.645 * std_dev)
+            p95 = avg + (1.645 * std_dev) if std_dev > 0 else avg
+
+            # Calculate coefficient of variation for reliability score
+            cv = (std_dev / avg) if avg > 0 else 0
+            reliability = max(0, min(100, int(100 - (cv * 100)))) / 100
+
+            return {
+                'p95_lead_time': int(round(p95)),
+                'reliability_score': reliability,
+                'data_source': 'primary_calculated',
+                'source_warehouse': primary_warehouse
+            }
+
+    # Tier 4: Calculate from opposite warehouse historical shipments
+    opposite_shipments = execute_query(
+        shipment_query,
+        (supplier, opposite_warehouse),
+        fetch_one=True,
+        fetch_all=False
+    )
+
+    if opposite_shipments and opposite_shipments.get('shipment_count', 0) > 0:
+        avg = float(opposite_shipments.get('avg_lead_time', 0)) if opposite_shipments.get('avg_lead_time') else 0
+        std_dev = float(opposite_shipments.get('std_dev_lead_time', 0)) if opposite_shipments.get('std_dev_lead_time') else 0
+
+        if avg > 0:
+            # Calculate P95 using normal distribution approximation
+            p95 = avg + (1.645 * std_dev) if std_dev > 0 else avg
+
+            # Calculate coefficient of variation for reliability score
+            cv = (std_dev / avg) if avg > 0 else 0
+            reliability = max(0, min(100, int(100 - (cv * 100)))) / 100
+
+            return {
+                'p95_lead_time': int(round(p95)),
+                'reliability_score': reliability,
+                'data_source': 'fallback_calculated',
+                'source_warehouse': opposite_warehouse
+            }
+
+    # Tier 5: No data anywhere - use business standard default for truly new suppliers
+    return {
+        'p95_lead_time': 120,  # Business standard from data-management.html
+        'reliability_score': 0.70,  # Conservative reliability estimate
+        'data_source': 'default',
+        'source_warehouse': 'none'
+    }
+
+
 def get_time_phased_pending_orders(
     sku_id: str,
     warehouse: str,
@@ -141,22 +292,10 @@ def calculate_effective_pending_inventory(
         - overdue_count: Number of late orders
         - future_ignored: Total quantity beyond planning horizon
     """
-    # Get supplier lead time for planning horizon
-    lt_query = """
-        SELECT p95_lead_time, reliability_score
-        FROM supplier_lead_times
-        WHERE supplier = %s
-          AND destination = %s
-    """
-    lt_result = execute_query(lt_query, (supplier, warehouse), fetch_one=True, fetch_all=False)
-
-    if not lt_result:
-        # Default fallback if no lead time data
-        p95_lead_time = 60
-        reliability_score = 0.7
-    else:
-        p95_lead_time = lt_result.get('p95_lead_time') or 60
-        reliability_score = float(lt_result.get('reliability_score') or 70) / 100
+    # Get supplier lead time with intelligent cross-warehouse fallback
+    lead_time_data = get_supplier_lead_time_with_fallback(supplier, warehouse)
+    p95_lead_time = lead_time_data['p95_lead_time']
+    reliability_score = lead_time_data['reliability_score']
 
     planning_horizon = p95_lead_time + REVIEW_PERIOD_DAYS
 
@@ -779,14 +918,9 @@ def determine_monthly_order_timing(
     # Calculate daily demand using actual days
     daily_demand = demand_monthly / days_in_month if days_in_month > 0 else 0
 
-    # Get lead time from supplier_lead_times
-    lt_query = """
-        SELECT p95_lead_time
-        FROM supplier_lead_times
-        WHERE supplier = %s AND destination = %s
-    """
-    lt_result = execute_query(lt_query, (supplier, warehouse), fetch_one=True, fetch_all=False)
-    lead_time_days = lt_result.get('p95_lead_time') if lt_result and lt_result.get('p95_lead_time') else 60
+    # Get lead time with intelligent cross-warehouse fallback
+    lead_time_data = get_supplier_lead_time_with_fallback(supplier, warehouse)
+    lead_time_days = lead_time_data['p95_lead_time']
 
     # Calculate coverage
     current_position = current_stock + effective_pending

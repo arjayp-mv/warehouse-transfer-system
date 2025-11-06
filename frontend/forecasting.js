@@ -13,6 +13,7 @@
 
 const API_BASE = '/api/forecasts';
 let currentRunId = null;
+let currentRunStatus = null;
 let progressInterval = null;
 let forecastRunsTable = null;
 let forecastResultsTable = null;
@@ -103,7 +104,9 @@ function setupEventHandlers() {
     // Cancel Job Button
     $('#cancelJobBtn').on('click', function() {
         if (currentRunId) {
-            cancelForecast(currentRunId);
+            // Pass the current status to the cancel function
+            // Default to 'running' if status not yet fetched
+            cancelForecast(currentRunId, currentRunStatus || 'running');
         }
     });
 
@@ -311,6 +314,7 @@ async function generateForecast() {
                 console.log('Forecast started immediately with run_id:', data.run_id);
                 showSuccess('Forecast generation started!');
                 currentRunId = data.run_id;
+                currentRunStatus = data.status; // Initialize status
 
                 // Show progress section and start polling
                 $('#currentJobSection').show();
@@ -359,6 +363,9 @@ async function updateJobProgress(runId) {
         const job = await response.json();
 
         if (response.ok) {
+            // Store current status for cancel button
+            currentRunStatus = job.status;
+
             // Update progress bar
             const progress = job.progress_percent || 0;
             $('#progressBar').css('width', `${progress}%`).text(`${progress.toFixed(1)}%`);
@@ -376,6 +383,7 @@ async function updateJobProgress(runId) {
             if (job.status === 'completed' || job.status === 'failed' || job.status === 'cancelled') {
                 clearInterval(progressInterval);
                 progressInterval = null;
+                currentRunStatus = null; // Reset status
 
                 if (job.status === 'completed') {
                     showSuccess('Forecast generation completed!');

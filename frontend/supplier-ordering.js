@@ -563,18 +563,23 @@ function openSKUDetailsModal(skuId, warehouse) {
     document.getElementById('pending-content').innerHTML = '<p class="text-muted">Click to load pending orders...</p>';
     document.getElementById('forecast-content').innerHTML = '<p class="text-muted">Click to load forecast data...</p>';
     document.getElementById('stockout-content').innerHTML = '<p class="text-muted">Click to load stockout history...</p>';
+    document.getElementById('coverage-timeline-content').innerHTML = '<p class="text-muted">Click to load coverage timeline...</p>';
 
     // Reset tab button states - make Overview active, others inactive
     document.getElementById('overview-tab').classList.add('active');
     document.getElementById('pending-tab').classList.remove('active');
     document.getElementById('forecast-tab').classList.remove('active');
     document.getElementById('stockout-tab').classList.remove('active');
+    document.getElementById('coverage-timeline-tab').classList.remove('active');
+    document.getElementById('supplier-performance-tab').classList.remove('active');
 
     // Reset tab pane states - make Overview visible, others hidden
     document.getElementById('overview').classList.add('show', 'active');
     document.getElementById('pending').classList.remove('show', 'active');
     document.getElementById('forecast').classList.remove('show', 'active');
     document.getElementById('stockout').classList.remove('show', 'active');
+    document.getElementById('coverage-timeline').classList.remove('show', 'active');
+    document.getElementById('supplier-performance').classList.remove('show', 'active');
 
     // Destroy any existing chart instances to prevent memory leaks
     if (window.forecastChartInstance) {
@@ -589,6 +594,8 @@ function openSKUDetailsModal(skuId, warehouse) {
     document.getElementById('pending-tab').addEventListener('click', () => loadPendingTab(skuId, warehouse), { once: true });
     document.getElementById('forecast-tab').addEventListener('click', () => loadForecastTab(skuId, warehouse), { once: true });
     document.getElementById('stockout-tab').addEventListener('click', () => loadStockoutTab(skuId, warehouse), { once: true });
+    document.getElementById('coverage-timeline-tab').addEventListener('click', () => loadCoverageTimelineTab(skuId, warehouse), { once: true });
+    document.getElementById('supplier-performance-tab').addEventListener('click', () => loadSupplierPerformanceTab(skuId, warehouse), { once: true });
 
     // Add cleanup event listener to clear all content when modal is hidden
     // This ensures fresh data load on next modal open
@@ -598,6 +605,8 @@ function openSKUDetailsModal(skuId, warehouse) {
         document.getElementById('pending-content').innerHTML = '';
         document.getElementById('forecast-content').innerHTML = '';
         document.getElementById('stockout-content').innerHTML = '';
+        document.getElementById('coverage-timeline-content').innerHTML = '';
+        document.getElementById('supplier-performance-content').innerHTML = '';
 
         // Destroy chart instance to free memory
         if (window.forecastChartInstance) {
@@ -935,6 +944,317 @@ async function loadStockoutTab(skuId, warehouse) {
     } catch (error) {
         console.error('Failed to load stockout history:', error);
         document.getElementById('stockout-content').innerHTML = '<p class="text-danger">Error loading stockout history. Endpoint may not be implemented yet.</p>';
+    }
+}
+
+/**
+ * Load coverage timeline tab (V10.0 Phase 3)
+ * Shows day-by-day inventory projection with stockout prediction
+ * @param {string} skuId - SKU identifier
+ * @param {string} warehouse - Warehouse name (burnaby or kentucky)
+ * @returns {Promise<void>}
+ */
+async function loadCoverageTimelineTab(skuId, warehouse) {
+    try {
+        document.getElementById('coverage-timeline-content').innerHTML = '<p class="text-muted">Loading coverage timeline...</p>';
+
+        const response = await fetch(`/api/supplier-orders/coverage-timeline/${skuId}?warehouse=${warehouse}&projection_days=90`);
+
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+
+        const data = await response.json();
+
+        let html = `
+            <!-- Summary Cards -->
+            <div class="row mb-3">
+                <div class="col-md-3">
+                    <div class="card">
+                        <div class="card-body text-center">
+                            <h6 class="card-title">Current Inventory</h6>
+                            <h3 class="text-primary">${data.current_inventory.toLocaleString()}</h3>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="card">
+                        <div class="card-body text-center">
+                            <h6 class="card-title">Daily Demand</h6>
+                            <h3 class="text-info">${data.daily_demand}</h3>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="card">
+                        <div class="card-body text-center">
+                            <h6 class="card-title">Coverage Days</h6>
+                            <h3 class="${data.coverage_days < 30 ? 'text-danger' : data.coverage_days < 60 ? 'text-warning' : 'text-success'}">
+                                ${data.coverage_days}${data.stockout_date ? '' : '+'}
+                            </h3>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="card">
+                        <div class="card-body text-center">
+                            <h6 class="card-title">Stockout Date</h6>
+                            <h3 class="${data.stockout_date ? 'text-danger' : 'text-success'}">
+                                ${data.stockout_date ? new Date(data.stockout_date).toLocaleDateString() : 'None'}
+                            </h3>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Forecast Source Info -->
+            <div class="alert alert-info">
+                <strong>Demand Source:</strong> ${data.forecast_source}
+            </div>
+
+            <!-- Pending Arrivals -->
+            ${data.pending_arrivals.length > 0 ? `
+                <h6 class="mt-3">Pending Arrivals (${data.pending_arrivals.length})</h6>
+                <div class="table-responsive" style="max-height: 150px;">
+                    <table class="table table-sm table-striped">
+                        <thead>
+                            <tr>
+                                <th>Arrival Date</th>
+                                <th>Quantity</th>
+                                <th>Supplier</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${data.pending_arrivals.map(arrival => `
+                                <tr>
+                                    <td>${new Date(arrival.arrival_date).toLocaleDateString()}</td>
+                                    <td>${arrival.quantity.toLocaleString()}</td>
+                                    <td>${arrival.supplier}</td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                </div>
+            ` : '<p class="text-muted">No pending arrivals</p>'}
+
+            <!-- Daily Timeline -->
+            <h6 class="mt-4">Daily Inventory Projection (First 30 Days)</h6>
+            <div class="table-responsive" style="max-height: 400px;">
+                <table class="table table-sm table-striped">
+                    <thead style="position: sticky; top: 0; background: white; z-index: 1;">
+                        <tr>
+                            <th>Date</th>
+                            <th>Inventory</th>
+                            <th>Demand</th>
+                            <th>Arrivals</th>
+                            <th>Days Coverage</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${data.timeline.slice(0, 30).map(day => {
+                            const isLowStock = day.days_coverage < 30;
+                            const isCritical = day.days_coverage < 7;
+                            const rowClass = isCritical ? 'table-danger' : (isLowStock ? 'table-warning' : '');
+                            return `
+                                <tr class="${rowClass}">
+                                    <td>${new Date(day.date).toLocaleDateString()}</td>
+                                    <td>${day.inventory.toLocaleString()}</td>
+                                    <td>${day.demand}</td>
+                                    <td>${day.arrivals > 0 ? `<strong>+${day.arrivals}</strong>` : '-'}</td>
+                                    <td>${day.days_coverage}</td>
+                                </tr>
+                            `;
+                        }).join('')}
+                    </tbody>
+                </table>
+            </div>
+        `;
+
+        document.getElementById('coverage-timeline-content').innerHTML = html;
+
+    } catch (error) {
+        console.error('Failed to load coverage timeline:', error);
+        document.getElementById('coverage-timeline-content').innerHTML = '<p class="text-danger">Error loading coverage timeline.</p>';
+    }
+}
+
+/**
+ * Load supplier performance tab (V10.0 Phase 3)
+ * Shows supplier lead time statistics, recent shipments, and pending orders
+ * @param {string} skuId - SKU identifier
+ * @param {string} warehouse - Warehouse name (burnaby or kentucky)
+ * @returns {Promise<void>}
+ */
+async function loadSupplierPerformanceTab(skuId, warehouse) {
+    try {
+        document.getElementById('supplier-performance-content').innerHTML = '<p class="text-muted">Loading supplier performance...</p>';
+
+        const response = await fetch(`/api/supplier-orders/supplier-performance/${skuId}?warehouse=${warehouse}`);
+
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+
+        const data = await response.json();
+
+        // Check for error in response
+        if (data.error) {
+            document.getElementById('supplier-performance-content').innerHTML = `<p class="text-warning">${data.error}</p>`;
+            return;
+        }
+
+        const stats = data.lead_time_stats;
+        const shipments = data.recent_shipments;
+        const pending = data.pending_orders;
+
+        let html = `
+            <!-- Supplier Header -->
+            <div class="alert alert-info">
+                <strong>Supplier:</strong> ${data.supplier_name}
+                <span class="ms-3"><strong>Warehouse:</strong> ${warehouse.charAt(0).toUpperCase() + warehouse.slice(1)}</span>
+                ${stats.data_source ? `<span class="ms-3 badge bg-secondary">${stats.data_source === 'pre_calculated' ? 'Pre-calculated Stats' : 'Real-time Calculation'}</span>` : ''}
+            </div>
+
+            <!-- Lead Time Statistics -->
+            <h6 class="mt-3">Lead Time Statistics</h6>
+            <div class="row mb-3">
+                <div class="col-md-2">
+                    <div class="card">
+                        <div class="card-body text-center">
+                            <h6 class="card-title text-muted small">Average</h6>
+                            <h4 class="text-primary">${stats.avg_lead_time.toFixed(1)}</h4>
+                            <small class="text-muted">days</small>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-2">
+                    <div class="card">
+                        <div class="card-body text-center">
+                            <h6 class="card-title text-muted small">Median</h6>
+                            <h4 class="text-info">${stats.median_lead_time.toFixed(1)}</h4>
+                            <small class="text-muted">days</small>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-2">
+                    <div class="card">
+                        <div class="card-body text-center">
+                            <h6 class="card-title text-muted small">P95</h6>
+                            <h4 class="text-warning">${stats.p95_lead_time.toFixed(1)}</h4>
+                            <small class="text-muted">days</small>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-2">
+                    <div class="card">
+                        <div class="card-body text-center">
+                            <h6 class="card-title text-muted small">Min / Max</h6>
+                            <h4 class="text-success">${stats.min_lead_time} / ${stats.max_lead_time}</h4>
+                            <small class="text-muted">days</small>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-2">
+                    <div class="card">
+                        <div class="card-body text-center">
+                            <h6 class="card-title text-muted small">Reliability</h6>
+                            <h4 class="${stats.reliability_score >= 80 ? 'text-success' : stats.reliability_score >= 60 ? 'text-warning' : 'text-danger'}">${stats.reliability_score}</h4>
+                            <small class="text-muted">score</small>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-2">
+                    <div class="card">
+                        <div class="card-body text-center">
+                            <h6 class="card-title text-muted small">On-Time Rate</h6>
+                            <h4 class="${data.on_time_delivery_rate >= 80 ? 'text-success' : data.on_time_delivery_rate >= 60 ? 'text-warning' : 'text-danger'}">${data.on_time_delivery_rate.toFixed(1)}%</h4>
+                            <small class="text-muted">${data.total_shipments} shipments</small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Pending Orders -->
+            ${pending.length > 0 ? `
+                <h6 class="mt-4">Pending Orders (${pending.length})</h6>
+                <div class="table-responsive" style="max-height: 200px;">
+                    <table class="table table-sm table-striped">
+                        <thead style="position: sticky; top: 0; background: white; z-index: 1;">
+                            <tr>
+                                <th>Quantity</th>
+                                <th>Order Date</th>
+                                <th>Expected Arrival</th>
+                                <th>Lead Time</th>
+                                <th>Days Until Arrival</th>
+                                <th>Status</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${pending.map(order => {
+                                const isLate = order.days_until_arrival < 0;
+                                const isSoon = order.days_until_arrival <= 7 && order.days_until_arrival >= 0;
+                                const rowClass = isLate ? 'table-danger' : (isSoon ? 'table-warning' : '');
+                                return `
+                                    <tr class="${rowClass}">
+                                        <td>${order.quantity.toLocaleString()}</td>
+                                        <td>${new Date(order.order_date).toLocaleDateString()}</td>
+                                        <td>${order.expected_arrival !== 'Estimated' ? new Date(order.expected_arrival).toLocaleDateString() : order.expected_arrival}</td>
+                                        <td>${order.lead_time_days} days</td>
+                                        <td>${order.days_until_arrival >= 0 ? order.days_until_arrival : 'Late'}</td>
+                                        <td><span class="badge bg-primary">${order.status}</span></td>
+                                    </tr>
+                                `;
+                            }).join('')}
+                        </tbody>
+                    </table>
+                </div>
+            ` : '<p class="text-muted">No pending orders for this supplier</p>'}
+
+            <!-- Recent Shipments -->
+            <h6 class="mt-4">Recent Shipment History (Last 12 Months)</h6>
+            ${shipments.length > 0 ? `
+                <div class="table-responsive" style="max-height: 300px;">
+                    <table class="table table-sm table-striped">
+                        <thead style="position: sticky; top: 0; background: white; z-index: 1;">
+                            <tr>
+                                <th>PO Number</th>
+                                <th>Order Date</th>
+                                <th>Received Date</th>
+                                <th>Lead Time</th>
+                                <th>Partial?</th>
+                                <th>Notes</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${shipments.map(shipment => {
+                                const onTimeThreshold = stats.avg_lead_time * 1.1;
+                                const isLate = shipment.actual_lead_time > onTimeThreshold;
+                                const rowClass = isLate ? 'table-warning' : '';
+                                return `
+                                    <tr class="${rowClass}">
+                                        <td>${shipment.po_number}</td>
+                                        <td>${new Date(shipment.order_date).toLocaleDateString()}</td>
+                                        <td>${new Date(shipment.received_date).toLocaleDateString()}</td>
+                                        <td><strong>${shipment.actual_lead_time}</strong> days</td>
+                                        <td>${shipment.was_partial ? '<span class="badge bg-warning">Yes</span>' : '<span class="badge bg-success">No</span>'}</td>
+                                        <td>${shipment.notes || '-'}</td>
+                                    </tr>
+                                `;
+                            }).join('')}
+                        </tbody>
+                    </table>
+                </div>
+                <small class="text-muted">
+                    Rows highlighted in yellow indicate deliveries that exceeded the on-time threshold (${(stats.avg_lead_time * 1.1).toFixed(1)} days).
+                </small>
+            ` : '<p class="text-muted">No recent shipment history available</p>'}
+        `;
+
+        document.getElementById('supplier-performance-content').innerHTML = html;
+
+    } catch (error) {
+        console.error('Failed to load supplier performance:', error);
+        document.getElementById('supplier-performance-content').innerHTML = '<p class="text-danger">Error loading supplier performance data.</p>';
     }
 }
 

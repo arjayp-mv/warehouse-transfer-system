@@ -33,6 +33,8 @@ from backend.supplier_ordering_models import (
 )
 from backend.supplier_ordering_queries import build_orders_query, build_summary_queries
 from backend.import_export import import_export_manager
+from backend.supplier_coverage_timeline import calculate_coverage_timeline
+from backend.supplier_performance import get_supplier_performance
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/supplier-orders", tags=["supplier-orders"])
@@ -676,4 +678,148 @@ async def export_to_csv(
         raise HTTPException(
             status_code=500,
             detail=f"Failed to generate CSV export: {str(e)}"
+        )
+
+
+@router.get("/coverage-timeline/{sku_id}")
+async def get_coverage_timeline(
+    sku_id: str,
+    warehouse: str = Query(..., description="Warehouse name (burnaby or kentucky)"),
+    projection_days: int = Query(180, description="Number of days to project (default: 180 = 6 months)")
+):
+    """
+    Get inventory coverage timeline for a specific SKU/warehouse combination.
+
+    Calculates day-by-day inventory projection showing when the SKU will run out
+    of stock based on current inventory, pending orders, and forecast demand.
+
+    Args:
+        sku_id: SKU identifier
+        warehouse: Warehouse name ('burnaby' or 'kentucky')
+        projection_days: Number of days to project forward (default: 180)
+
+    Returns:
+        JSON containing:
+        - timeline: List of daily inventory levels
+        - stockout_date: Predicted stockout date
+        - coverage_days: Days until stockout
+        - current_inventory: Starting inventory
+        - pending_arrivals: Scheduled arrivals
+        - daily_demand: Average daily demand
+        - forecast_source: Data source description
+
+    Raises:
+        HTTPException 400: Invalid parameters
+        HTTPException 404: SKU not found
+        HTTPException 500: Calculation error
+    """
+    try:
+        logger.info(f"Calculating coverage timeline for {sku_id} at {warehouse}")
+
+        # Calculate timeline
+        result = calculate_coverage_timeline(
+            sku_id=sku_id,
+            warehouse=warehouse,
+            projection_days=projection_days
+        )
+
+        # Check if we got valid data
+        if result['current_inventory'] is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"SKU {sku_id} not found in inventory for {warehouse}"
+            )
+
+        logger.info(
+            f"Coverage timeline calculated: {result['coverage_days']} days coverage, "
+            f"stockout: {result['stockout_date'] or 'covered entire period'}"
+        )
+
+        return result
+
+    except ValueError as e:
+        logger.error(f"Invalid parameters for coverage timeline: {str(e)}")
+        raise HTTPException(
+            status_code=400,
+            detail=str(e)
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to calculate coverage timeline: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to calculate coverage timeline: {str(e)}"
+        )
+
+
+@router.get("/supplier-performance/{sku_id}")
+async def get_supplier_performance_metrics(
+    sku_id: str,
+    warehouse: str = Query(..., description="Warehouse name (burnaby or kentucky)")
+):
+    """
+    Get supplier performance metrics for a specific SKU/warehouse combination.
+
+    Returns comprehensive supplier performance data including:
+    - Lead time statistics (avg, median, P95, variability)
+    - Recent shipment history (last 12 months)
+    - Pending orders count and quantities
+    - On-time delivery rate
+
+    Args:
+        sku_id: SKU identifier
+        warehouse: Warehouse name (burnaby or kentucky)
+
+    Returns:
+        JSON with supplier performance metrics:
+        - supplier_name: Name of the supplier
+        - lead_time_stats: Lead time statistics dict
+        - recent_shipments: List of recent shipments
+        - pending_orders: List of pending orders
+        - on_time_delivery_rate: Percentage of on-time deliveries
+        - reliability_score: Overall reliability score (0-100)
+
+    Raises:
+        HTTPException 400: Invalid parameters
+        HTTPException 404: SKU not found or no supplier assigned
+        HTTPException 500: Calculation error
+    """
+    try:
+        logger.info(f"Fetching supplier performance for {sku_id} at {warehouse}")
+
+        # Get performance metrics
+        result = get_supplier_performance(
+            sku_id=sku_id,
+            warehouse=warehouse
+        )
+
+        # Check if we got an error
+        if 'error' in result:
+            raise HTTPException(
+                status_code=404,
+                detail=result['error']
+            )
+
+        logger.info(
+            f"Supplier performance retrieved: {result['supplier_name']}, "
+            f"reliability: {result['reliability_score']}, "
+            f"on-time rate: {result['on_time_delivery_rate']}%"
+        )
+
+        return result
+
+    except ValueError as e:
+        logger.error(f"Invalid parameters for supplier performance: {str(e)}")
+        raise HTTPException(
+            status_code=400,
+            detail=str(e)
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get supplier performance: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to get supplier performance: {str(e)}"
         )
