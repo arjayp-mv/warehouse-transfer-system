@@ -1892,9 +1892,7 @@ PO-2024-003,Yuasa Battery,2024-02-01,2024-05-25,kentucky,false,
         }
 
         function showAllPendingOrders() {
-            // This would open a detailed pending orders management page
-            // For now, show an alert
-            alert('Full pending orders management interface coming soon!');
+            window.location.href = '/static/pending-orders.html';
         }
 
         async function editPendingOrder(orderId) {
