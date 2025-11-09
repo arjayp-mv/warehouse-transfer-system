@@ -846,6 +846,40 @@ class TransferCalculator:
                 'days_until_arrival': None
             }
 
+    def _get_pending_data_fallback(self, sku_id: str, kentucky_qty: float) -> Dict[str, Any]:
+        """
+        Helper method to retrieve pending data in fallback/exception scenarios
+
+        Args:
+            sku_id: SKU identifier
+            kentucky_qty: Current Kentucky quantity for fallback calculation
+
+        Returns:
+            Dictionary with pending data fields for use with dictionary unpacking
+        """
+        try:
+            pending_data = self.get_pending_orders_data(sku_id)
+            kentucky_pending = pending_data.get('kentucky_pending', 0)
+            burnaby_pending = pending_data.get('burnaby_pending', 0)
+            days_until_arrival = pending_data.get('days_until_arrival')
+
+            return {
+                'kentucky_pending': kentucky_pending,
+                'burnaby_pending': burnaby_pending,
+                'days_until_arrival': days_until_arrival,
+                'pending_orders_included': True if (kentucky_pending > 0 or burnaby_pending > 0) else False,
+                'current_position_with_pending': kentucky_qty + kentucky_pending
+            }
+        except Exception as e:
+            logger.warning(f"Could not retrieve pending data in fallback for {sku_id}: {e}")
+            return {
+                'kentucky_pending': 0,
+                'burnaby_pending': 0,
+                'days_until_arrival': None,
+                'pending_orders_included': False,
+                'current_position_with_pending': kentucky_qty
+            }
+
     def check_stockout_override(self, sku_id: str, warehouse: str = 'kentucky') -> Dict[str, Any]:
         """
         Check if a SKU is marked as out-of-stock in stockout_dates table
@@ -1583,12 +1617,9 @@ class TransferCalculator:
                 'available_from_burnaby': 0,
                 'burnaby_min_retain': 0,
 
-                # Pending orders data (fallback values)
-                'kentucky_pending': 0,
-                'burnaby_pending': 0,
-                'days_until_arrival': None,
-                'pending_orders_included': False,
-                'current_position_with_pending': kentucky_qty,
+                # Pending orders data - retrieve actual values even in exception case
+                # Try to fetch from database since we're in fallback mode
+                **self._get_pending_data_fallback(sku_id, kentucky_qty),
 
                 # Transfer confirmation data (fallback values)
                 'confirmed_qty': sku_data.get('confirmed_qty'),
@@ -2534,6 +2565,25 @@ def calculate_all_transfer_recommendations(use_enhanced: bool = True) -> List[Di
                     'kentucky_stockout': bool(sku_data.get('kentucky_stockout', 0)),
                     'burnaby_stockout': bool(sku_data.get('burnaby_stockout', 0))
                 }
+
+                # Retrieve pending orders for minimal_rec fallback
+                try:
+                    pending_data = calculator.get_pending_orders_data(sku_data['sku_id'])
+                    minimal_rec['kentucky_pending'] = pending_data.get('kentucky_pending', 0)
+                    minimal_rec['burnaby_pending'] = pending_data.get('burnaby_pending', 0)
+                    minimal_rec['days_until_arrival'] = pending_data.get('days_until_arrival')
+                    minimal_rec['pending_orders_included'] = True
+                    minimal_rec['current_position_with_pending'] = (
+                        sku_data.get('kentucky_qty', 0) + pending_data.get('kentucky_pending', 0)
+                    )
+                except Exception as e:
+                    logger.warning(f"Could not retrieve pending for {sku_data['sku_id']} in fallback: {e}")
+                    minimal_rec['kentucky_pending'] = 0
+                    minimal_rec['burnaby_pending'] = 0
+                    minimal_rec['days_until_arrival'] = None
+                    minimal_rec['pending_orders_included'] = False
+                    minimal_rec['current_position_with_pending'] = sku_data.get('kentucky_qty', 0)
+
                 recommendations.append(minimal_rec)
         
         # Sort by priority (CRITICAL -> HIGH -> MEDIUM -> LOW)

@@ -1472,11 +1472,12 @@ async def debug_test():
 
 @app.post("/api/pending-orders/import-csv",
          summary="Import Pending Orders from CSV File",
-         description="Upload a CSV file and import pending orders with optional replace mode",
+         description="Upload a CSV file and import pending orders with optional replace mode and date format selection",
          tags=["Pending Orders"])
 async def import_pending_orders_from_csv(
     file: UploadFile = File(...),
-    replace_existing: bool = False
+    replace_existing: bool = False,
+    date_format: str = "MM/DD/YYYY"
 ):
     """
     Import pending orders from CSV file upload
@@ -1484,6 +1485,7 @@ async def import_pending_orders_from_csv(
     Args:
         file: CSV file with pending orders data
         replace_existing: If True, clear all existing pending orders before import
+        date_format: Date format in CSV file - MM/DD/YYYY, DD/MM/YYYY, YYYY-MM-DD, or auto
     """
 
     if not file.filename or not file.filename.lower().endswith('.csv'):
@@ -1500,10 +1502,44 @@ async def import_pending_orders_from_csv(
         # Parse CSV
         import csv
         import io
-        from datetime import datetime, timedelta
+        from datetime import datetime, timedelta, date
+        from typing import Optional
 
         csv_file = io.StringIO(csv_text)
         reader = csv.DictReader(csv_file)
+
+        # Map user-friendly date format to Python strptime format
+        format_mapping = {
+            "MM/DD/YYYY": "%m/%d/%Y",
+            "DD/MM/YYYY": "%d/%m/%Y",
+            "YYYY-MM-DD": "%Y-%m-%d",
+            "YYYY/MM/DD": "%Y/%m/%d"
+        }
+
+        # Helper function to parse dates with multiple format attempts
+        def parse_date_flexible(date_str: str, user_format: str) -> Optional[date]:
+            """Parse date string using specified format, with auto-detect fallback"""
+            if not date_str:
+                return None
+
+            formats_to_try = []
+            if user_format == "auto":
+                # Try all formats
+                formats_to_try = list(format_mapping.values())
+            elif user_format in format_mapping:
+                # Try user-specified format first, then fallback to others
+                formats_to_try = [format_mapping[user_format]] + [f for f in format_mapping.values() if f != format_mapping[user_format]]
+            else:
+                # Unknown format, try all
+                formats_to_try = list(format_mapping.values())
+
+            for fmt in formats_to_try:
+                try:
+                    return datetime.strptime(date_str, fmt).date()
+                except ValueError:
+                    continue
+
+            return None
 
         orders = []
         estimated_dates_added = 0
@@ -1529,40 +1565,35 @@ async def import_pending_orders_from_csv(
             except ValueError:
                 continue
 
-            # Parse order_date (required field)
+            # Parse order_date using flexible date format
             order_date_str = row.get('order_date', '').strip()
             if order_date_str:
-                try:
-                    order_date = datetime.strptime(order_date_str, '%Y-%m-%d').date()
+                order_date = parse_date_flexible(order_date_str, date_format)
+                if order_date:
                     # Validate order date is not in the future
                     if order_date > datetime.now().date():
                         order_date = datetime.now().date()
-                except ValueError:
-                    # Default to today if invalid date
+                else:
+                    # Could not parse date - default to today
                     order_date = datetime.now().date()
             else:
                 # Default to today if no order_date provided (backward compatibility)
                 order_date = datetime.now().date()
 
-            # Parse optional expected_arrival
+            # Parse optional expected_arrival using flexible date format
             expected_date_str = row.get('expected_arrival', '').strip()
             if not expected_date_str:
                 # Try alternative column names for backward compatibility
                 expected_date_str = row.get('expected_date', '').strip()
 
             if expected_date_str:
-                try:
-                    expected_arrival = datetime.strptime(expected_date_str, '%Y-%m-%d').date()
-                    # Validate expected date is after order date
-                    if expected_arrival < order_date:
-                        expected_arrival = None
-                        expected_arrival_iso = None
-                        is_estimated = True
-                        estimated_dates_added += 1
-                    else:
-                        expected_arrival_iso = expected_arrival.isoformat()
-                        is_estimated = False
-                except ValueError:
+                expected_arrival = parse_date_flexible(expected_date_str, date_format)
+                if expected_arrival and expected_arrival >= order_date:
+                    # Valid expected date
+                    expected_arrival_iso = expected_arrival.isoformat()
+                    is_estimated = False
+                else:
+                    # Invalid or date before order date
                     expected_arrival = None
                     expected_arrival_iso = None
                     is_estimated = True

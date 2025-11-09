@@ -1458,8 +1458,47 @@ class ImportExportManager:
             today = datetime.now().date()
             default_lead_time = 120  # days
 
-            # Set defaults for missing optional columns
-            if 'order_date' not in df_clean.columns:
+            # Parse order_date column with flexible date format handling
+            if 'order_date' in df_clean.columns:
+                logger.info(f"DEBUG: Found order_date column with {len(df_clean)} rows")
+                logger.info(f"DEBUG: Sample order_date values: {df_clean['order_date'].head().tolist()}")
+
+                # Try to parse order_date with multiple common formats
+                order_date_parsed = pd.to_datetime(df_clean['order_date'], errors='coerce', dayfirst=False)
+
+                logger.info(f"DEBUG: After initial parse, first 5 parsed dates: {order_date_parsed.head().tolist()}")
+                logger.info(f"DEBUG: Failed to parse {order_date_parsed.isna().sum()} dates")
+
+                # If parsing failed for any dates, try alternative formats
+                failed_dates = order_date_parsed.isna() & df_clean['order_date'].notna()
+                if failed_dates.any():
+                    logger.info(f"DEBUG: Trying dayfirst=True for {failed_dates.sum()} failed dates")
+                    # Try dayfirst format for failed dates
+                    df_clean.loc[failed_dates, 'order_date_temp'] = pd.to_datetime(
+                        df_clean.loc[failed_dates, 'order_date'],
+                        errors='coerce',
+                        dayfirst=True
+                    )
+                    order_date_parsed.loc[failed_dates] = df_clean.loc[failed_dates, 'order_date_temp']
+                    df_clean.drop(columns=['order_date_temp'], errors='ignore', inplace=True)
+
+                # Convert to date and handle any remaining unparseable dates
+                df_clean['order_date'] = order_date_parsed.dt.date
+                logger.info(f"DEBUG: After .dt.date conversion, first 5 dates: {df_clean['order_date'].head().tolist()}")
+
+                unparseable_count = df_clean['order_date'].isna().sum()
+
+                if unparseable_count > 0:
+                    self.validation_warnings.append(
+                        f"Unable to parse {unparseable_count} order dates - using today's date instead"
+                    )
+                    logger.warning(f"DEBUG: Filling {unparseable_count} NaN dates with today: {today}")
+                    df_clean['order_date'] = df_clean['order_date'].fillna(today)
+
+                logger.info(f"DEBUG: Final order_date values (first 5): {df_clean['order_date'].head().tolist()}")
+            else:
+                # Set defaults for missing optional columns
+                logger.info("DEBUG: No order_date column found, using today for all")
                 df_clean['order_date'] = today
 
             if 'lead_time_days' not in df_clean.columns:

@@ -418,6 +418,24 @@
                                 </div>
                                 <input type="file" id="pending-file-input" accept=".xlsx,.xls,.csv" style="display: none;">
 
+                                <!-- Date Format Selector -->
+                                <div class="mb-3 mt-3">
+                                    <label for="pending-date-format" class="form-label">
+                                        <i class="fas fa-calendar-alt me-1"></i>
+                                        Date Format in CSV
+                                    </label>
+                                    <select class="form-select" id="pending-date-format">
+                                        <option value="MM/DD/YYYY" selected>MM/DD/YYYY (US - e.g., 8/11/2025 = August 11)</option>
+                                        <option value="DD/MM/YYYY">DD/MM/YYYY (International - e.g., 8/11/2025 = November 8)</option>
+                                        <option value="YYYY-MM-DD">YYYY-MM-DD (ISO - e.g., 2025-08-11)</option>
+                                        <option value="auto">Auto-detect (slower)</option>
+                                    </select>
+                                    <div class="form-text">
+                                        <i class="fas fa-info-circle text-info me-1"></i>
+                                        <small>Select the date format used in your CSV file for order_date and expected_date columns</small>
+                                    </div>
+                                </div>
+
                                 <!-- Replace Mode Checkbox -->
                                 <div class="form-check mt-3">
                                     <input class="form-check-input" type="checkbox" id="replace-existing-orders">
@@ -1557,14 +1575,17 @@ PO-2024-003,Yuasa Battery,2024-02-01,2024-05-25,kentucky,false,
                 // Check if replace mode is enabled
                 const replaceMode = document.getElementById('replace-existing-orders').checked;
 
+                // Get selected date format
+                const dateFormat = document.getElementById('pending-date-format').value;
+
                 // Create FormData for file upload
                 const formData = new FormData();
                 formData.append('file', file);
 
                 progressBar.style.width = '30%';
 
-                // Build URL with replace parameter
-                const url = `/api/pending-orders/import-csv?replace_existing=${replaceMode}`;
+                // Build URL with replace and date_format parameters
+                const url = `/api/pending-orders/import-csv?replace_existing=${replaceMode}&date_format=${dateFormat}`;
 
                 // Upload to pending orders import endpoint
                 const response = await fetch(url, {
